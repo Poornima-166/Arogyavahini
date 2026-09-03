@@ -1,0 +1,167 @@
+import React, { createContext, useContext, useState, useEffect, useCallback } from 'react';
+import { AppNotification } from '../types';
+import { api } from '../services/api';
+import { useAuth } from './AuthContext';
+import { soundEffects } from '../utils/sound';
+
+interface NotificationContextType {
+  notifications: AppNotification[];
+  unreadCount: number;
+  loading: boolean;
+  fetchNotifications: () => Promise<void>;
+  markAsRead: (id: number) => Promise<void>;
+  markAllAsRead: () => Promise<void>;
+  deleteNotification: (id: number) => Promise<void>;
+  clearAll: () => Promise<void>;
+}
+
+const NotificationContext = createContext<NotificationContextType | undefined>(undefined);
+
+export const NotificationProvider: React.FC<{ children: React.ReactNode }> = ({ children }) => {
+  const { user, isAuthenticated } = useAuth();
+  const [notifications, setNotifications] = useState<AppNotification[]>([]);
+  const [unreadCount, setUnreadCount] = useState<number>(0);
+  const [loading, setLoading] = useState<boolean>(false);
+  const [lastKnownIds, setLastKnownIds] = useState<Set<number>>(new Set());
+
+  const fetchNotifications = useCallback(async () => {
+    if (!isAuthenticated || !user) {
+      setNotifications([]);
+      setUnreadCount(0);
+      return;
+    }
+
+    try {
+      const data = await api.getNotifications({
+        userId: user.id,
+        role: user.role,
+        limit: 50,
+      });
+
+      // Check if there are newly arrived notifications to trigger a subtle chime
+      const currentIds = new Set(data.notifications.map((n) => n.id));
+      if (lastKnownIds.size > 0) {
+        const hasNew = data.notifications.some(
+          (n) => !lastKnownIds.has(n.id) && !n.is_read
+        );
+        if (hasNew) {
+          soundEffects.playAlert();
+        }
+      }
+      setLastKnownIds(currentIds);
+
+      setNotifications(data.notifications || []);
+      setUnreadCount(data.unreadCount || 0);
+    } catch (err) {
+      // Quietly ignore polling errors to prevent disruptive logs
+      console.debug('Notification poll error:', err);
+    }
+  }, [isAuthenticated, user, lastKnownIds]);
+
+  // Initial fetch and automatic polling interval
+  useEffect(() => {
+    if (isAuthenticated && user) {
+      setLoading(true);
+      fetchNotifications().finally(() => setLoading(false));
+
+      // Reliable automatic polling every 4 seconds
+      const interval = setInterval(() => {
+        fetchNotifications();
+      }, 4000);
+
+      return () => clearInterval(interval);
+    } else {
+      setNotifications([]);
+      setUnreadCount(0);
+      setLastKnownIds(new Set());
+    }
+  }, [isAuthenticated, user?.id, user?.role]);
+
+  const markAsRead = async (id: number) => {
+    try {
+      // Optimistic local update
+      setNotifications((prev) =>
+        prev.map((n) => (n.id === id ? { ...n, is_read: 1 } : n))
+      );
+      setUnreadCount((prev) => Math.max(0, prev - 1));
+
+      await api.markNotificationRead(id);
+    } catch (err) {
+      console.error('Failed to mark notification read:', err);
+      // Refetch on error
+      fetchNotifications();
+    }
+  };
+
+  const markAllAsRead = async () => {
+    if (!user) return;
+    try {
+      // Optimistic local update
+      setNotifications((prev) => prev.map((n) => ({ ...n, is_read: 1 })));
+      setUnreadCount(0);
+
+      await api.markAllNotificationsRead({
+        userId: user.id,
+        role: user.role,
+      });
+    } catch (err) {
+      console.error('Failed to mark all notifications read:', err);
+      fetchNotifications();
+    }
+  };
+
+  const deleteNotification = async (id: number) => {
+    try {
+      const target = notifications.find((n) => n.id === id);
+      setNotifications((prev) => prev.filter((n) => n.id !== id));
+      if (target && !target.is_read) {
+        setUnreadCount((prev) => Math.max(0, prev - 1));
+      }
+
+      await api.deleteNotification(id);
+    } catch (err) {
+      console.error('Failed to delete notification:', err);
+      fetchNotifications();
+    }
+  };
+
+  const clearAll = async () => {
+    if (!user) return;
+    try {
+      setNotifications([]);
+      setUnreadCount(0);
+      await api.clearAllNotifications({
+        userId: user.id,
+        role: user.role,
+      });
+    } catch (err) {
+      console.error('Failed to clear notifications:', err);
+      fetchNotifications();
+    }
+  };
+
+  return (
+    <NotificationContext.Provider
+      value={{
+        notifications,
+        unreadCount,
+        loading,
+        fetchNotifications,
+        markAsRead,
+        markAllAsRead,
+        deleteNotification,
+        clearAll,
+      }}
+    >
+      {children}
+    </NotificationContext.Provider>
+  );
+};
+
+export const useNotifications = (): NotificationContextType => {
+  const context = useContext(NotificationContext);
+  if (!context) {
+    throw new Error('useNotifications must be used within a NotificationProvider');
+  }
+  return context;
+};

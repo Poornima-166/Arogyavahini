@@ -1,5 +1,8 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState } from 'react';
 import { AuthProvider, useAuth } from './context/AuthContext';
+import { LanguageProvider, useLanguage } from './context/LanguageContext';
+import { ThemeProvider } from './context/ThemeContext';
+import { NotificationProvider } from './context/NotificationContext';
 import { Navbar } from './components/Navbar';
 import { HomeHero } from './components/HomeHero';
 import { PatientDashboard } from './components/PatientDashboard';
@@ -12,15 +15,13 @@ import {
   CheckCircle, 
   AlertCircle, 
   Info, 
-  Database, 
-  Cpu, 
-  Terminal, 
-  Sparkles,
+  Activity,
   PhoneCall
 } from 'lucide-react';
 
 function AppContent() {
   const { user, isAuthenticated, toast } = useAuth();
+  const { t } = useLanguage();
   const [authModalOpen, setAuthModalOpen] = useState(false);
   const [authModalMode, setAuthModalMode] = useState<'login' | 'register'>('login');
 
@@ -32,7 +33,7 @@ function AppContent() {
   const role = user?.role?.toLowerCase();
 
   return (
-    <div className="min-h-screen bg-[#f1f5f9] text-slate-800 flex flex-col font-sans selection:bg-blue-600 selection:text-white">
+    <div className="min-h-screen bg-slate-50 dark:bg-slate-950 text-slate-900 dark:text-slate-100 flex flex-col font-sans selection:bg-red-600 selection:text-white transition-colors duration-200">
       {/* Toast Notification Container */}
       {toast && (
         <div className="fixed bottom-6 right-6 z-50 animate-in slide-in-from-bottom-5 duration-200">
@@ -71,41 +72,37 @@ function AppContent() {
         )}
       </main>
 
-      {/* Footer */}
-      <footer className="mt-12 bg-white border-t border-slate-200 py-6 px-4 sm:px-6 text-xs text-slate-500">
+      {/* Production-Grade Clean Footer */}
+      <footer className="mt-12 bg-white dark:bg-slate-900 border-t border-slate-200 dark:border-slate-800 py-6 px-4 sm:px-6 text-xs text-slate-500 dark:text-slate-400 transition-colors">
         <div className="max-w-7xl mx-auto flex flex-col md:flex-row items-center justify-between gap-4">
           <div className="flex items-center gap-3">
-            <div className="w-8 h-8 rounded-lg bg-blue-600 flex items-center justify-center text-white font-bold text-sm">
-              A
+            <div className="w-8 h-8 rounded-lg bg-red-600 flex items-center justify-center text-white font-bold text-sm shadow-xs">
+              <Activity className="w-4 h-4" />
             </div>
             <div>
-              <span className="font-bold text-slate-900 block text-sm">
-                Arogyavahini
+              <span className="font-bold text-slate-900 dark:text-white block text-sm">
+                {t.appTitle}
               </span>
-              <span className="text-[11px] text-slate-500 font-medium">
-                Emergency Medical Response & Ambulance Dispatch System
+              <span className="text-[11px] text-slate-500 dark:text-slate-400 font-medium">
+                {t.appSubtitle}
               </span>
             </div>
           </div>
 
-          <div className="flex flex-wrap items-center justify-center gap-4 text-slate-600 font-medium text-xs">
-            <span className="flex items-center gap-1.5 bg-slate-100 px-2.5 py-1 rounded-md border border-slate-200">
-              <Cpu className="w-3.5 h-3.5 text-blue-600" />
-              <span>React 19 + Express.js</span>
+          <div className="flex flex-wrap items-center justify-center gap-3 text-slate-600 dark:text-slate-300 font-medium text-xs">
+            <span className="flex items-center gap-1.5 bg-red-50 dark:bg-red-950/50 text-red-700 dark:text-red-400 px-3 py-1 rounded-md border border-red-200 dark:border-red-900 font-bold">
+              <PhoneCall className="w-3.5 h-3.5" />
+              <span>{t.footerEmergencyHotline}</span>
             </span>
-            <span className="flex items-center gap-1.5 bg-slate-100 px-2.5 py-1 rounded-md border border-slate-200">
-              <Database className="w-3.5 h-3.5 text-emerald-600" />
-              <span>SQLite Persistent Storage</span>
-            </span>
-            <span className="flex items-center gap-1.5 bg-slate-100 px-2.5 py-1 rounded-md border border-slate-200">
-              <Terminal className="w-3.5 h-3.5 text-slate-600" />
-              <span>REST Endpoints</span>
+            <span className="flex items-center gap-1.5 bg-slate-100 dark:bg-slate-800 px-3 py-1 rounded-md border border-slate-200 dark:border-slate-700">
+              <ShieldCheck className="w-3.5 h-3.5 text-blue-600 dark:text-blue-400" />
+              <span>24/7 Verified Medical Dispatch</span>
             </span>
           </div>
 
           <div className="text-center md:text-right">
-            <p className="text-[11px] text-slate-400">
-              Automated Ambulance Routing • Live Driver Status • Hospital Management
+            <p className="text-[11px] text-slate-400 dark:text-slate-500">
+              {t.footerDesc}
             </p>
           </div>
         </div>
@@ -123,8 +120,14 @@ function AppContent() {
 
 export default function App() {
   return (
-    <AuthProvider>
-      <AppContent />
-    </AuthProvider>
+    <ThemeProvider>
+      <LanguageProvider>
+        <AuthProvider>
+          <NotificationProvider>
+            <AppContent />
+          </NotificationProvider>
+        </AuthProvider>
+      </LanguageProvider>
+    </ThemeProvider>
   );
 }

@@ -72,6 +72,7 @@ function initializeSchema(db: Database) {
 
   // Create or Migrate EmergencyRequests table
   migrateEmergencyRequestsTable(db);
+  ensureRouteOptimizationColumns(db);
 
   // Create ActivityLogs table for audit trail
   db.run(`
@@ -81,6 +82,23 @@ function initializeSchema(db: Database) {
       action TEXT NOT NULL,
       performed_by TEXT NOT NULL,
       timestamp TEXT DEFAULT CURRENT_TIMESTAMP
+    );
+  `);
+
+  // Create Notifications table
+  db.run(`
+    CREATE TABLE IF NOT EXISTS notifications (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      user_id INTEGER,
+      role TEXT CHECK(role IN ('patient', 'driver', 'admin')),
+      title TEXT NOT NULL,
+      message TEXT NOT NULL,
+      notification_type TEXT NOT NULL,
+      emergency_request_id INTEGER,
+      is_read INTEGER DEFAULT 0,
+      created_at TEXT DEFAULT CURRENT_TIMESTAMP,
+      FOREIGN KEY (user_id) REFERENCES users(id),
+      FOREIGN KEY (emergency_request_id) REFERENCES emergency_requests(id)
     );
   `);
 
@@ -173,6 +191,55 @@ function migrateEmergencyRequestsTable(db: Database) {
   }
 }
 
+function ensureRouteOptimizationColumns(db: Database) {
+  try {
+    const tableInfo = db.exec("PRAGMA table_info(emergency_requests)");
+    if (!tableInfo || tableInfo.length === 0 || !tableInfo[0].values) return;
+    const cols = tableInfo[0].values.map((v: any[]) => v[1] as string);
+
+    const columnsToAdd: [string, string][] = [
+      ['route_origin', 'TEXT'],
+      ['route_destination', 'TEXT'],
+      ['optimized_routes', 'TEXT'],
+      ['selected_route_id', 'TEXT'],
+      ['current_eta_minutes', 'REAL'],
+      ['current_distance_km', 'REAL'],
+      ['current_traffic', 'TEXT'],
+      ['hospital_routes', 'TEXT'],
+      ['selected_hospital', 'TEXT'],
+      ['navigation_started', 'INTEGER DEFAULT 0'],
+      ['driver_current_latitude', 'REAL'],
+      ['driver_current_longitude', 'REAL'],
+      ['driver_accuracy', 'REAL'],
+      ['navigation_stage', 'TEXT DEFAULT "TO_PATIENT"'],
+      ['route_updated_at', 'TEXT'],
+    ];
+
+    for (const [colName, colType] of columnsToAdd) {
+      if (!cols.includes(colName)) {
+        db.run(`ALTER TABLE emergency_requests ADD COLUMN ${colName} ${colType};`);
+      }
+    }
+
+    const ambInfo = db.exec("PRAGMA table_info(ambulances)");
+    if (ambInfo && ambInfo[0]?.values) {
+      const ambCols = ambInfo[0].values.map((v: any[]) => v[1] as string);
+      const ambColsToAdd: [string, string][] = [
+        ['current_latitude', 'REAL'],
+        ['current_longitude', 'REAL'],
+        ['last_gps_update', 'TEXT'],
+      ];
+      for (const [cName, cType] of ambColsToAdd) {
+        if (!ambCols.includes(cName)) {
+          db.run(`ALTER TABLE ambulances ADD COLUMN ${cName} ${cType};`);
+        }
+      }
+    }
+  } catch (err) {
+    console.error('Error adding route optimization columns:', err);
+  }
+}
+
 export function seedInitialData(db: Database) {
   // Check if users exist
   const userCheck = db.exec("SELECT COUNT(*) as count FROM users");
@@ -227,12 +294,20 @@ export function seedInitialData(db: Database) {
       (1, 'Request accepted by driver Mohammed Irfan', 'Mohammed Irfan', '${twoHoursAgo}'),
       (1, 'Ambulance reached hospital with patient', 'Mohammed Irfan', '${twoHoursAgo}');
     `);
+
+    db.run(`
+      INSERT INTO notifications (user_id, role, title, message, notification_type, emergency_request_id, is_read, created_at) VALUES
+      (1, 'patient', 'Emergency Request Completed', 'Your emergency request has been completed.', 'EMERGENCY_COMPLETED', 1, 1, '${twoHoursAgo}'),
+      (2, 'driver', 'Mission Completed', 'Hospital handover complete for emergency request #1. Ambulance is now ready on standby.', 'MISSION_COMPLETED', 1, 1, '${twoHoursAgo}'),
+      (3, 'admin', 'Emergency Completed #1', 'Emergency request #1 has been successfully completed and resolved.', 'ADMIN_EMERGENCY_COMPLETED', 1, 1, '${twoHoursAgo}');
+    `);
   }
 }
 
 // Reset database to default clean state
 export async function resetDatabase(): Promise<void> {
   const db = await getDb();
+  db.run(`DROP TABLE IF EXISTS notifications;`);
   db.run(`DROP TABLE IF EXISTS activity_logs;`);
   db.run(`DROP TABLE IF EXISTS emergency_requests;`);
   db.run(`DROP TABLE IF EXISTS ambulances;`);

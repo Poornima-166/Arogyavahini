@@ -1,4 +1,4 @@
-import { User, Ambulance, EmergencyRequest, ActivityLog, SystemStats, CreateEmergencyInput, UserRole, EmergencyStatus, AmbulanceStatus } from '../types';
+import { User, Ambulance, EmergencyRequest, ActivityLog, SystemStats, CreateEmergencyInput, UserRole, EmergencyStatus, AmbulanceStatus, AppNotification } from '../types';
 
 const API_BASE = '/api';
 
@@ -11,6 +11,50 @@ async function handleResponse<T>(res: Response): Promise<T> {
 }
 
 export const api = {
+  // Notifications
+  async getNotifications(params?: { userId?: number; role?: UserRole; limit?: number }): Promise<{ count: number; unreadCount: number; notifications: AppNotification[] }> {
+    const query = new URLSearchParams();
+    if (params?.userId) query.set('userId', params.userId.toString());
+    if (params?.role) query.set('role', params.role);
+    if (params?.limit) query.set('limit', params.limit.toString());
+
+    const queryString = query.toString() ? `?${query.toString()}` : '';
+    const res = await fetch(`${API_BASE}/notifications${queryString}`);
+    return handleResponse(res);
+  },
+
+  async markNotificationRead(id: number): Promise<{ message: string; id: number }> {
+    const res = await fetch(`${API_BASE}/notifications/${id}/read`, {
+      method: 'PATCH',
+    });
+    return handleResponse(res);
+  },
+
+  async markAllNotificationsRead(params: { userId?: number; role?: UserRole }): Promise<{ message: string }> {
+    const res = await fetch(`${API_BASE}/notifications/mark-all-read`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(params),
+    });
+    return handleResponse(res);
+  },
+
+  async deleteNotification(id: number): Promise<{ message: string; id: number }> {
+    const res = await fetch(`${API_BASE}/notifications/${id}`, {
+      method: 'DELETE',
+    });
+    return handleResponse(res);
+  },
+
+  async clearAllNotifications(params: { userId?: number; role?: UserRole }): Promise<{ message: string }> {
+    const res = await fetch(`${API_BASE}/notifications/clear-all`, {
+      method: 'DELETE',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(params),
+    });
+    return handleResponse(res);
+  },
+
   // Auth
   async login(email: string, password: string): Promise<{ user: User; message: string }> {
     const res = await fetch(`${API_BASE}/auth/login`, {
@@ -86,6 +130,104 @@ export const api = {
       method: 'PUT',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ status, updated_by, driver_ambulance_id }),
+    });
+    return handleResponse(res);
+  },
+
+  // AI Route Optimization APIs
+  async recalculateRoute(
+    id: number,
+    params?: { origin?: string; destination?: string; originLatitude?: number; originLongitude?: number; destLatitude?: number; destLongitude?: number }
+  ): Promise<{ message: string; emergency: EmergencyRequest; routeOptimization: any; hospitalOptimization: any }> {
+    const res = await fetch(`${API_BASE}/emergency/${id}/recalculate-route`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(params || {}),
+    });
+    return handleResponse(res);
+  },
+
+  async updateDriverLocation(
+    id: number,
+    coords: { latitude: number; longitude: number; accuracy?: number; speed?: number; heading?: number }
+  ): Promise<{ success: boolean; message: string; location: { latitude: number; longitude: number; accuracy?: number; updated_at: string } }> {
+    const res = await fetch(`${API_BASE}/emergency/${id}/driver-location`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(coords),
+    });
+    return handleResponse(res);
+  },
+
+  async findNearbyHospitals(
+    id: number,
+    params?: { latitude?: number; longitude?: number }
+  ): Promise<{ message: string; source: 'live_places' | 'fallback'; hospitals: HospitalOption[]; emergency: EmergencyRequest }> {
+    const res = await fetch(`${API_BASE}/emergency/${id}/find-hospitals`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(params || {}),
+    });
+    return handleResponse(res);
+  },
+
+  async navigateToHospital(
+    id: number,
+    params: { hospitalName: string; hospitalCoords?: [number, number]; driverCoords?: { latitude: number; longitude: number } }
+  ): Promise<{ message: string; stage: string; emergency: EmergencyRequest; routeOptimization: any }> {
+    const res = await fetch(`${API_BASE}/emergency/${id}/navigate-to-hospital`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(params),
+    });
+    return handleResponse(res);
+  },
+
+  async getNearbyHospitals(params: { lat: number; lng: number; emergencyType?: string; radius?: number }): Promise<{
+    hospitals: HospitalOption[];
+    source: 'live_places' | 'fallback';
+    message: string;
+  }> {
+    const q = new URLSearchParams({
+      lat: params.lat.toString(),
+      lng: params.lng.toString(),
+      emergencyType: params.emergencyType || 'General',
+      radius: (params.radius || 10000).toString(),
+    });
+    const res = await fetch(`${API_BASE}/nearby-hospitals?${q.toString()}`);
+    return handleResponse(res);
+  },
+
+  async selectRoute(
+    id: number,
+    routeId: string
+  ): Promise<{ message: string; emergency: EmergencyRequest; selectedRoute: any }> {
+    const res = await fetch(`${API_BASE}/emergency/${id}/select-route`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ routeId }),
+    });
+    return handleResponse(res);
+  },
+
+  async startNavigation(
+    id: number
+  ): Promise<{ message: string; emergency: EmergencyRequest }> {
+    const res = await fetch(`${API_BASE}/emergency/${id}/start-navigation`, {
+      method: 'POST',
+    });
+    return handleResponse(res);
+  },
+
+  async selectHospital(
+    id: number,
+    hospitalName: string,
+    hospitalId?: string
+  ): Promise<{ message: string; emergency: EmergencyRequest }> {
+    const res = await fetch(`${API_BASE}/emergency/${id}/select-hospital`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ hospitalName, hospitalId }),
     });
     return handleResponse(res);
   },
