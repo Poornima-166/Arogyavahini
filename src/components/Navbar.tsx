@@ -5,6 +5,8 @@ import { useTheme } from '../context/ThemeContext';
 import { soundEffects } from '../utils/sound';
 import { Language } from '../i18n/translations';
 import { NotificationBell } from './NotificationBell';
+import { useLocation } from '../context/LocationContext';
+import { LiveLocationModal } from './LiveLocationModal';
 import { 
   Heart,
   Truck, 
@@ -27,7 +29,9 @@ import {
   Sun,
   Moon,
   ChevronDown,
-  Check
+  Check,
+  Compass,
+  MapPin
 } from 'lucide-react';
 
 interface NavbarProps {
@@ -38,9 +42,11 @@ export const Navbar: React.FC<NavbarProps> = ({ openAuthModal }) => {
   const { user, isAuthenticated, logout } = useAuth();
   const { language, setLanguage, t } = useLanguage();
   const { theme, toggleTheme, isDark } = useTheme();
+  const { userCoords, locationSource, cityName, isLocating } = useLocation();
   const [soundOn, setSoundOn] = useState(true);
   const [activeItem, setActiveItem] = useState<string>('dashboard');
   const [langMenuOpen, setLangMenuOpen] = useState(false);
+  const [isLocationModalOpen, setIsLocationModalOpen] = useState(false);
   const langMenuRef = useRef<HTMLDivElement>(null);
 
   useEffect(() => {
@@ -336,6 +342,23 @@ export const Navbar: React.FC<NavbarProps> = ({ openAuthModal }) => {
 
         {/* Right Section: Language, Theme, Sound, User Info & Logout / Login */}
         <div className="flex items-center gap-2 sm:gap-2.5 shrink-0">
+          {/* Live GPS Location Pill Button */}
+          <button
+            type="button"
+            onClick={() => setIsLocationModalOpen(true)}
+            title="Click to view exact GPS coordinates, calibrate device sensor, or switch cities"
+            className="px-2.5 py-1.5 rounded-lg border border-emerald-300 dark:border-emerald-800/80 bg-emerald-50 dark:bg-emerald-950/40 text-emerald-900 dark:text-emerald-300 hover:bg-emerald-100 dark:hover:bg-emerald-900/60 transition-colors flex items-center gap-1.5 text-xs font-semibold cursor-pointer shadow-xs"
+          >
+            <span className="w-2 h-2 rounded-full bg-emerald-500 animate-ping shrink-0" />
+            <Compass className={`w-3.5 h-3.5 text-emerald-600 dark:text-emerald-400 ${isLocating ? 'animate-spin' : ''}`} />
+            <span className="hidden md:inline font-mono">
+              {userCoords ? `${userCoords.latitude.toFixed(3)}, ${userCoords.longitude.toFixed(3)}` : 'Detecting GPS...'}
+            </span>
+            <span className="text-[10px] bg-emerald-200/90 dark:bg-emerald-900/90 text-emerald-900 dark:text-emerald-100 px-1.5 py-0.5 rounded font-bold uppercase tracking-wider">
+              {locationSource === 'gps' ? 'GPS' : locationSource === 'ip' ? 'IP FIX' : cityName || 'LIVE'}
+            </span>
+          </button>
+
           {/* Language Selector Dropdown */}
           <div className="relative" ref={langMenuRef}>
             <button
@@ -570,6 +593,12 @@ export const Navbar: React.FC<NavbarProps> = ({ openAuthModal }) => {
           )}
         </div>
       )}
+
+      {/* Live GPS Calibrator & Location Modal */}
+      <LiveLocationModal
+        isOpen={isLocationModalOpen}
+        onClose={() => setIsLocationModalOpen(false)}
+      />
     </header>
   );
 };

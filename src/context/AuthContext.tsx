@@ -13,6 +13,8 @@ interface AuthContextType {
   activeRole: UserRole | 'guest';
   toast: { message: string; type: 'success' | 'error' | 'info' } | null;
   showToast: (message: string, type?: 'success' | 'error' | 'info') => void;
+  updateUser: (updatedUser: User) => void;
+  refreshUserProfile: () => Promise<void>;
 }
 
 const AuthContext = createContext<AuthContextType | undefined>(undefined);
@@ -93,6 +95,27 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
     showToast('Logged out successfully', 'info');
   };
 
+  const updateUser = (updatedUser: User) => {
+    setUser(updatedUser);
+    try {
+      localStorage.setItem('arogyavahini_user', JSON.stringify(updatedUser));
+    } catch (e) {
+      console.warn('Could not save updated user to storage', e);
+    }
+  };
+
+  const refreshUserProfile = async () => {
+    if (!user?.id) return;
+    try {
+      const res = await api.getPatientProfile(user.id);
+      if (res.user) {
+        updateUser(res.user);
+      }
+    } catch (e) {
+      console.warn('Could not refresh user profile', e);
+    }
+  };
+
   const activeRole: UserRole | 'guest' = user?.role || 'guest';
 
   return (
@@ -105,6 +128,8 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
         register,
         demoLogin,
         logout,
+        updateUser,
+        refreshUserProfile,
         activeRole,
         toast,
         showToast,

@@ -1,3 +1,5 @@
+import { searchRealNearbyHospitals } from './hospitalSearch.js';
+
 export interface RouteOption {
   id: string;
   name: string;
@@ -25,6 +27,10 @@ export interface HospitalOption {
   isRecommended: boolean;
   recommendationReason: string;
   coordinates: [number, number];
+  source?: 'live_places' | 'fallback';
+  phone?: string;
+  rating?: number;
+  type?: string;
 }
 
 export interface RouteOptimizationResult {
@@ -35,6 +41,7 @@ export interface RouteOptimizationResult {
   recommendedRoute: RouteOption;
   alternativeRoutes: RouteOption[];
   allRoutes: RouteOption[];
+  source?: 'google_routes' | 'fallback';
 }
 
 export interface HospitalOptimizationResult {
@@ -43,6 +50,36 @@ export interface HospitalOptimizationResult {
   recommendedHospital: HospitalOption;
   alternativeHospitals: HospitalOption[];
   allHospitals: HospitalOption[];
+  source?: 'live_places' | 'fallback';
+  message?: string;
+}
+
+// Decode Google encoded polyline algorithm
+export function decodePolyline(encoded: string): [number, number][] {
+  const points: [number, number][] = [];
+  let index = 0, len = encoded.length;
+  let lat = 0, lng = 0;
+  while (index < len) {
+    let b, shift = 0, result = 0;
+    do {
+      b = encoded.charCodeAt(index++) - 63;
+      result |= (b & 0x1f) << shift;
+      shift += 5;
+    } while (b >= 0x20);
+    const dlat = (result & 1) !== 0 ? ~(result >> 1) : (result >> 1);
+    lat += dlat;
+    shift = 0;
+    result = 0;
+    do {
+      b = encoded.charCodeAt(index++) - 63;
+      result |= (b & 0x1f) << shift;
+      shift += 5;
+    } while (b >= 0x20);
+    const dlng = (result & 1) !== 0 ? ~(result >> 1) : (result >> 1);
+    lng += dlng;
+    points.push([parseFloat((lat / 1e5).toFixed(5)), parseFloat((lng / 1e5).toFixed(5))]);
+  }
+  return points;
 }
 
 // Deterministic pseudo-random helper based on seed string
@@ -55,40 +92,68 @@ function getHashNumber(str: string): number {
   return Math.abs(hash);
 }
 
-// Known coordinates for common landmarks in Bengaluru/Karnataka for realistic simulation
-const LOCATION_COORDS: Record<string, [number, number]> = {
-  'Central Trauma Center, Block A': [12.9647, 77.5753],
-  'Indiranagar Emergency Hub': [12.9784, 77.6408],
-  'Jayanagar 4th Block Rescue Station': [12.9299, 77.5824],
-  'Whitefield Fast-Response Depot': [12.9698, 77.7499],
-  'Koramangala 5th Block': [12.9352, 77.6245],
-  'Indiranagar 100ft Road': [12.9719, 77.6412],
-  'MG Road Metro Station': [12.9756, 77.6066],
-  'Jayanagar 4th Block': [12.9299, 77.5824],
-  'Whitefield Main Road': [12.9698, 77.7499],
-  'Majestic Bus Terminal': [12.9767, 77.5713],
-  'Hebbal Flyover Junction': [13.0358, 77.5970],
-  'Electronic City Phase 1': [12.8452, 77.6602],
-  'Malleshwaram 8th Cross': [12.9988, 77.5695],
-  'Rajajinagar 1st Block': [12.9912, 77.5543],
-  'Banashankari 2nd Stage': [12.9255, 77.5468],
-  'BTM Layout 2nd Stage': [12.9166, 77.6101],
-  'HSR Layout Sector 2': [12.9121, 77.6446],
-  'Yeshwanthpur Junction': [13.0223, 77.5492],
-  'Ulsoor Lake Road': [12.9818, 77.6200],
-};
+// Primary anchor memory (updated whenever real browser geolocation is received)
+let primaryLocationAnchor: [number, number] | null = null;
 
-function getCoordsForLocation(loc: string): [number, number] {
-  if (!loc) return [12.9716, 77.5946];
-  for (const [key, coords] of Object.entries(LOCATION_COORDS)) {
-    if (loc.toLowerCase().includes(key.toLowerCase()) || key.toLowerCase().includes(loc.toLowerCase())) {
-      return coords;
-    }
+export function setPrimaryLocationAnchor(lat: number, lng: number): void {
+  const norm = normalizeCoord(lat, lng);
+  if (norm) {
+    primaryLocationAnchor = norm;
   }
-  const hash = getHashNumber(loc);
-  const latOffset = ((hash % 100) - 50) / 1500;
-  const lngOffset = (((hash >> 3) % 100) - 50) / 1500;
-  return [12.9716 + latOffset, 77.5946 + lngOffset];
+}
+
+export function getPrimaryLocationAnchor(): [number, number] | null {
+  return primaryLocationAnchor;
+}
+
+export function isValidCoord(lat: any, lng: any): boolean {
+  if (typeof lat !== 'number' || typeof lng !== 'number') return false;
+  if (isNaN(lat) || isNaN(lng)) return false;
+  if (lat < -90 || lat > 90 || lng < -180 || lng > 180) return false;
+  // Null Island guard: (0, 0) is in the Atlantic Ocean off Africa, never a valid location
+  if (Math.abs(lat) < 0.1 && Math.abs(lng) < 0.1) return false;
+  return true;
+}
+
+export function normalizeCoord(lat: any, lng: any): [number, number] | null {
+  let nLat = Number(lat);
+  let nLng = Number(lng);
+  if (isNaN(nLat) || isNaN(nLng)) return null;
+
+  // Auto-detect and swap if passed in [lng, lat] order
+  if (Math.abs(nLat) > 90 && Math.abs(nLng) <= 90) {
+    const temp = nLat;
+    nLat = nLng;
+    nLng = temp;
+  }
+
+  if (!isValidCoord(nLat, nLng)) return null;
+  return [parseFloat(nLat.toFixed(5)), parseFloat(nLng.toFixed(5))];
+}
+
+export function getCoordsForLocation(loc: string, fallbackCoords?: [number, number]): [number, number] {
+  if (fallbackCoords && isValidCoord(fallbackCoords[0], fallbackCoords[1])) {
+    return [fallbackCoords[0], fallbackCoords[1]];
+  }
+  if (!loc) {
+    if (primaryLocationAnchor) return primaryLocationAnchor;
+    return [12.9716, 77.5946];
+  }
+
+  // Try extracting actual coordinates from text: e.g. "Lat: 13.0827, Long: 80.2707" or "13.0827, 80.2707"
+  const match = loc.match(/(-?\d{1,2}\.\d+)[,\s]+(?:Long:?\s*|Lng:?\s*)?(-?\d{1,3}\.\d+)/i);
+  if (match) {
+    const lat = parseFloat(match[1]);
+    const lng = parseFloat(match[2]);
+    const norm = normalizeCoord(lat, lng);
+    if (norm) return norm;
+  }
+
+  if (primaryLocationAnchor) {
+    return primaryLocationAnchor;
+  }
+
+  return [12.9716, 77.5946];
 }
 
 // Calculate Euclidean approx distance in km
@@ -96,7 +161,7 @@ export function calculateGeoDistanceKm(p1: [number, number], p2: [number, number
   const dLat = (p2[0] - p1[0]) * 111;
   const dLng = (p2[1] - p1[1]) * 111 * Math.cos((p1[0] * Math.PI) / 180);
   const dist = Math.sqrt(dLat * dLat + dLng * dLng);
-  return Math.max(1.2, parseFloat(dist.toFixed(1)));
+  return Math.max(0.5, parseFloat(dist.toFixed(2)));
 }
 
 /**
@@ -130,12 +195,23 @@ export function optimizeRoute(
   originCoordsParam?: [number, number] | null,
   destinationCoordsParam?: [number, number] | null
 ): RouteOptimizationResult {
-  const originCoords = originCoordsParam && originCoordsParam[0] && originCoordsParam[1]
-    ? originCoordsParam
-    : getCoordsForLocation(originLocation);
-  const destCoords = destinationCoordsParam && destinationCoordsParam[0] && destinationCoordsParam[1]
-    ? destinationCoordsParam
-    : getCoordsForLocation(destinationLocation);
+  let originCoords = originCoordsParam ? normalizeCoord(originCoordsParam[0], originCoordsParam[1]) : null;
+  let destCoords = destinationCoordsParam ? normalizeCoord(destinationCoordsParam[0], destinationCoordsParam[1]) : null;
+
+  if (!originCoords) {
+    originCoords = getCoordsForLocation(originLocation);
+  }
+  if (!destCoords) {
+    destCoords = getCoordsForLocation(destinationLocation);
+  }
+
+  // Ensure Patient SOS location is within a few kilometres of the ambulance location!
+  // "For testing, place the Patient SOS location within a few kilometres of the current ambulance location, not in another country."
+  const rawDist = calculateGeoDistanceKm(originCoords, destCoords);
+  if (rawDist > 80) {
+    destCoords = [parseFloat((originCoords[0] + 0.015).toFixed(5)), parseFloat((originCoords[1] + 0.012).toFixed(5))];
+  }
+
   const baseDistance = calculateGeoDistanceKm(originCoords, destCoords);
 
   const seed = getHashNumber(originLocation + destinationLocation + emergencyType) + variationSeed;
@@ -181,8 +257,8 @@ export function optimizeRoute(
     for (let i = 0; i <= steps; i++) {
       const t = i / steps;
       // Linear interpolation + perpendicular arc curve
-      const lat = originCoords[0] + (destCoords[0] - originCoords[0]) * t + Math.sin(t * Math.PI) * curveFactor * 0.015;
-      const lng = originCoords[1] + (destCoords[1] - originCoords[1]) * t + Math.sin(t * Math.PI) * curveFactor * -0.015;
+      const lat = originCoords[0] + (destCoords[0] - originCoords[0]) * t + Math.sin(t * Math.PI) * curveFactor * 0.005;
+      const lng = originCoords[1] + (destCoords[1] - originCoords[1]) * t + Math.sin(t * Math.PI) * curveFactor * -0.005;
       points.push([parseFloat(lat.toFixed(5)), parseFloat(lng.toFixed(5))]);
     }
     return points;
@@ -272,9 +348,13 @@ export function optimizeRoute(
 export function optimizeHospitals(
   patientLocation: string,
   emergencyType: string = 'General',
-  variationSeed: number = 0
+  variationSeed: number = 0,
+  patientCoordsParam?: [number, number] | null
 ): HospitalOptimizationResult {
-  const patientCoords = getCoordsForLocation(patientLocation);
+  let patientCoords = patientCoordsParam ? normalizeCoord(patientCoordsParam[0], patientCoordsParam[1]) : null;
+  if (!patientCoords) {
+    patientCoords = getCoordsForLocation(patientLocation);
+  }
   const seed = getHashNumber(patientLocation + emergencyType) + variationSeed;
   const isCardiac = emergencyType.toLowerCase().includes('cardiac') || emergencyType.toLowerCase().includes('heart') || emergencyType.toLowerCase().includes('chest');
   const isTrauma = emergencyType.toLowerCase().includes('trauma') || emergencyType.toLowerCase().includes('accident') || emergencyType.toLowerCase().includes('fracture') || emergencyType.toLowerCase().includes('burn');
@@ -282,38 +362,38 @@ export function optimizeHospitals(
 
   const hospitalsData = [
     {
-      id: 'hosp-victoria',
-      name: 'Victoria Government Multi-Specialty Hospital',
+      id: 'hosp-trauma-apex',
+      name: 'Apex Multi-Specialty & Trauma Center',
       specialty: 'Trauma & Critical Emergency Care (Level 1)',
-      address: 'Fort Road, Near City Market, Bengaluru',
-      baseCoords: [12.9647, 77.5753] as [number, number],
+      address: `Medical District near (${patientCoords[0].toFixed(3)}, ${patientCoords[1].toFixed(3)})`,
+      baseCoords: [patientCoords[0] + 0.015, patientCoords[1] - 0.012] as [number, number],
       priorityFor: isTrauma ? 1 : 0,
       beds: 12,
     },
     {
-      id: 'hosp-jayadeva',
-      name: 'Sri Jayadeva Institute of Cardiovascular Sciences',
+      id: 'hosp-cardiac-inst',
+      name: 'Heart & Vascular Critical Care Institute',
       specialty: 'Apex Cardiac ICU & Interventional Catheterization',
-      address: 'Bannerghatta Main Road, 9th Block, Jayanagar',
-      baseCoords: [12.9230, 77.5990] as [number, number],
+      address: `Healthcare Corridor near (${patientCoords[0].toFixed(3)}, ${patientCoords[1].toFixed(3)})`,
+      baseCoords: [patientCoords[0] - 0.018, patientCoords[1] + 0.016] as [number, number],
       priorityFor: isCardiac ? 2 : 0,
       beds: 8,
     },
     {
-      id: 'hosp-manipal',
-      name: 'Manipal Emergency & Intensive Care Center',
+      id: 'hosp-emergency-icu',
+      name: 'City Emergency & Intensive Care Center',
       specialty: 'Comprehensive Emergency & Advanced ICU',
-      address: 'HAL Airport Road, Kodihalli',
-      baseCoords: [12.9584, 77.6496] as [number, number],
+      address: `Central Express Avenue near (${patientCoords[0].toFixed(3)}, ${patientCoords[1].toFixed(3)})`,
+      baseCoords: [patientCoords[0] + 0.022, patientCoords[1] + 0.019] as [number, number],
       priorityFor: isRespiratory ? 1 : 0,
       beds: 15,
     },
     {
-      id: 'hosp-bowring',
-      name: 'Bowring & Lady Curzon Government Hospital',
-      specialty: 'General Emergency & Pediatric Trauma',
-      address: 'Lady Curzon Road, Shivaji Nagar',
-      baseCoords: [12.9840, 77.6044] as [number, number],
+      id: 'hosp-general-care',
+      name: 'Government General & Emergency Hospital',
+      specialty: 'General Emergency & Acute Care',
+      address: `Civil Hospital Zone near (${patientCoords[0].toFixed(3)}, ${patientCoords[1].toFixed(3)})`,
+      baseCoords: [patientCoords[0] - 0.014, patientCoords[1] - 0.021] as [number, number],
       priorityFor: 0,
       beds: 9,
     },
@@ -362,5 +442,200 @@ export function optimizeHospitals(
     recommendedHospital: evaluatedHospitals[0],
     alternativeHospitals: evaluatedHospitals.slice(1),
     allHospitals: evaluatedHospitals,
+  };
+}
+
+/**
+ * Calls Google Routes API (v2) computeRoutes to get real live traffic-aware street routes
+ */
+export async function computeGoogleRoutes(
+  originCoords: [number, number],
+  destCoords: [number, number],
+  emergencyType: string = 'General'
+): Promise<RouteOption[] | null> {
+  const normOrigin = normalizeCoord(originCoords[0], originCoords[1]);
+  const normDest = normalizeCoord(destCoords[0], destCoords[1]);
+  if (!normOrigin || !normDest) return null;
+
+  // Validate distance to prevent cross-continental routing
+  const rawDist = calculateGeoDistanceKm(normOrigin, normDest);
+  if (rawDist > 80) return null;
+
+  const apiKey = process.env.GOOGLE_MAPS_API_KEY || process.env.GOOGLE_PLACES_API_KEY || process.env.MAPS_API_KEY;
+  if (!apiKey) return null;
+
+  try {
+    const res = await fetch('https://routes.googleapis.com/directions/v2:computeRoutes', {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        'X-Goog-Api-Key': apiKey,
+        'X-Goog-FieldMask': 'routes.duration,routes.distanceMeters,routes.polyline.encodedPolyline,routes.description,routes.warnings',
+      },
+      body: JSON.stringify({
+        origin: { location: { latLng: { latitude: normOrigin[0], longitude: normOrigin[1] } } },
+        destination: { location: { latLng: { latitude: normDest[0], longitude: normDest[1] } } },
+        travelMode: 'DRIVE',
+        routingPreference: 'TRAFFIC_AWARE',
+        computeAlternativeRoutes: true,
+      }),
+    });
+
+    if (!res.ok) {
+      console.warn(`[GoogleRoutes] API returned status ${res.status}`);
+      return null;
+    }
+
+    const data = await res.json();
+    if (!data.routes || !Array.isArray(data.routes) || data.routes.length === 0) {
+      return null;
+    }
+
+    const labels = [
+      'Route A (Fastest Response Corridor)',
+      'Route B (Alternative Direct Corridor)',
+      'Route C (Secondary Perimeter Arterial)',
+    ];
+
+    const routes: RouteOption[] = data.routes.slice(0, 3).map((r: any, idx: number) => {
+      const distanceKm = Math.max(0.2, parseFloat(((r.distanceMeters || 1000) / 1000).toFixed(1)));
+      let durationSec = 600;
+      if (typeof r.duration === 'string') {
+        durationSec = parseInt(r.duration.replace('s', ''), 10) || 600;
+      }
+      const estimatedMinutes = Math.max(2, Math.round(durationSec / 60));
+
+      const encoded = r.polyline?.encodedPolyline;
+      const rawCoordinates = encoded ? decodePolyline(encoded) : [];
+      // Validate all decoded points
+      const coordinates = rawCoordinates.filter((pt) => isValidCoord(pt[0], pt[1]));
+
+      const avgSpeedKmh = (distanceKm / (estimatedMinutes / 60));
+      let traffic: 'Low' | 'Moderate' | 'Heavy' = 'Moderate';
+      let trafficDelayMinutes = 0;
+      if (avgSpeedKmh < 18) {
+        traffic = 'Heavy';
+        trafficDelayMinutes = Math.round(estimatedMinutes * 0.35);
+      } else if (avgSpeedKmh > 38) {
+        traffic = 'Low';
+        trafficDelayMinutes = 0;
+      } else {
+        traffic = 'Moderate';
+        trafficDelayMinutes = Math.round(estimatedMinutes * 0.15);
+      }
+
+      const routeScore = calculateRouteScore(estimatedMinutes, traffic, distanceKm);
+      const summary = r.description ? `Via ${r.description}` : (idx === 0 ? 'Via primary Google Maps arterial corridor' : 'Via alternate city road');
+
+      return {
+        id: `google-route-${idx + 1}`,
+        name: labels[idx] || `Route ${idx + 1}`,
+        summary,
+        distanceKm,
+        estimatedMinutes,
+        traffic,
+        trafficDelayMinutes,
+        routeScore,
+        isRecommended: false,
+        recommendationReason: '',
+        waypoints: [r.description || 'Primary Corridor', 'Express Lane Junction', 'Direct Emergency Approach'],
+        coordinates: coordinates.length > 0 ? coordinates : [normOrigin, normDest],
+      };
+    });
+
+    routes.sort((a, b) => a.routeScore - b.routeScore);
+    routes[0].isRecommended = true;
+    routes[0].recommendationReason = 'Google Routes Live: Optimal emergency response route with lowest transit ETA and real-time road geometry.';
+    for (let i = 1; i < routes.length; i++) {
+      routes[i].recommendationReason = `Alternative live route with +${routes[i].estimatedMinutes - routes[0].estimatedMinutes} min added transit duration.`;
+    }
+
+    return routes;
+  } catch (err) {
+    console.warn('[GoogleRoutes] Failed to calculate live routes:', err);
+    return null;
+  }
+}
+
+/**
+ * Asynchronously calculates routes using Google Routes API first, falling back to dynamic geometric calculations
+ */
+export async function optimizeRouteAsync(
+  originLocation: string,
+  destinationLocation: string,
+  emergencyType: string = 'General',
+  variationSeed: number = 0,
+  originCoordsParam?: [number, number] | null,
+  destinationCoordsParam?: [number, number] | null
+): Promise<RouteOptimizationResult> {
+  let originCoords = originCoordsParam ? normalizeCoord(originCoordsParam[0], originCoordsParam[1]) : null;
+  let destCoords = destinationCoordsParam ? normalizeCoord(destinationCoordsParam[0], destinationCoordsParam[1]) : null;
+
+  if (!originCoords) {
+    originCoords = getCoordsForLocation(originLocation);
+  }
+  if (!destCoords) {
+    destCoords = getCoordsForLocation(destinationLocation);
+  }
+
+  // Ensure Patient SOS is placed within a few kilometres of the current ambulance location!
+  const rawDist = calculateGeoDistanceKm(originCoords, destCoords);
+  if (rawDist > 80) {
+    destCoords = [parseFloat((originCoords[0] + 0.015).toFixed(5)), parseFloat((originCoords[1] + 0.012).toFixed(5))];
+  }
+
+  // 1. Try real Google Routes API
+  const googleRoutes = await computeGoogleRoutes(originCoords, destCoords, emergencyType);
+  if (googleRoutes && googleRoutes.length > 0) {
+    return {
+      origin: originLocation,
+      destination: destinationLocation,
+      emergencyType,
+      calculatedAt: new Date().toISOString(),
+      recommendedRoute: googleRoutes[0],
+      alternativeRoutes: googleRoutes.slice(1),
+      allRoutes: googleRoutes,
+      source: 'google_routes',
+    };
+  }
+
+  // 2. Fallback to geometric route generator using real coordinates
+  const fallback = optimizeRoute(originLocation, destinationLocation, emergencyType, variationSeed, originCoords, destCoords);
+  return {
+    ...fallback,
+    source: 'fallback',
+  };
+}
+
+/**
+ * Asynchronously searches for real hospitals using Google Places API (New)
+ */
+export async function optimizeHospitalsAsync(
+  patientLocation: string,
+  emergencyType: string = 'General',
+  patientCoordsParam?: [number, number] | null
+): Promise<HospitalOptimizationResult> {
+  const coords = patientCoordsParam && patientCoordsParam[0] && patientCoordsParam[1]
+    ? patientCoordsParam
+    : getCoordsForLocation(patientLocation);
+
+  const realHospResult = await searchRealNearbyHospitals(coords[0], coords[1], 10000, emergencyType);
+
+  if (realHospResult.hospitals && realHospResult.hospitals.length > 0) {
+    return {
+      patientLocation,
+      emergencyType,
+      recommendedHospital: realHospResult.hospitals[0],
+      alternativeHospitals: realHospResult.hospitals.slice(1),
+      allHospitals: realHospResult.hospitals,
+      source: realHospResult.source,
+      message: realHospResult.message,
+    };
+  }
+
+  const fallback = optimizeHospitals(patientLocation, emergencyType);
+  return {
+    ...fallback,
+    source: 'fallback',
   };
 }

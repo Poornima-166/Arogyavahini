@@ -25,6 +25,7 @@ import {
 import { RouteOption, HospitalOption } from '../types';
 import { getTrafficBadgeClass, formatMinutes, formatDistance } from '../utils/routeOptimizer';
 import { LeafletLiveMap } from './LeafletLiveMap';
+import { useLocation } from '../context/LocationContext';
 
 interface RouteMapVisualizerProps {
   originName: string;
@@ -52,6 +53,7 @@ interface RouteMapVisualizerProps {
   gpsPermissionStatus?: 'granted' | 'denied' | 'prompt' | 'unavailable' | 'demo';
   onEnableLiveLocation?: () => void;
   onUseDemoLocation?: () => void;
+  onSetManualLocation?: (latitude: number, longitude: number) => void;
   lastGpsTimestamp?: string | null;
 }
 
@@ -81,13 +83,18 @@ export const RouteMapVisualizer: React.FC<RouteMapVisualizerProps> = ({
   gpsPermissionStatus = 'prompt',
   onEnableLiveLocation,
   onUseDemoLocation,
+  onSetManualLocation,
   lastGpsTimestamp,
 }) => {
+  const { userCoords } = useLocation();
   const [activeRouteId, setActiveRouteId] = useState<string>(
     selectedRouteId || routes.find((r) => r.isRecommended)?.id || routes[0]?.id || ''
   );
   const [viewMode, setViewMode] = useState<'live_map' | 'schematic'>('live_map');
   const [isSimulating, setIsSimulating] = useState<boolean>(false);
+  const [showManualInput, setShowManualInput] = useState<boolean>(false);
+  const [manualLat, setManualLat] = useState<string>('');
+  const [manualLng, setManualLng] = useState<string>('');
   const [simulationProgress, setSimulationProgress] = useState<number>(0); // 0 to 1
   const [activeStepIndex, setActiveStepIndex] = useState<number>(0);
   const [chosenHospitalObj, setChosenHospitalObj] = useState<HospitalOption | null>(null);
@@ -150,12 +157,19 @@ export const RouteMapVisualizer: React.FC<RouteMapVisualizerProps> = ({
   const svgWidth = 800;
   const svgHeight = 420;
 
-  const points = currentRoute?.coordinates || [
-    [12.9716, 77.5946],
-    [12.975, 77.61],
-    [12.98, 77.625],
-    [12.985, 77.64],
-  ];
+  const refLat = driverCoords?.latitude || patientCoords?.latitude || userCoords?.latitude || currentRoute?.coordinates?.[0]?.[0] || 0;
+  const refLng = driverCoords?.longitude || patientCoords?.longitude || userCoords?.longitude || currentRoute?.coordinates?.[0]?.[1] || 0;
+
+  const points = currentRoute?.coordinates && currentRoute.coordinates.length > 0
+    ? currentRoute.coordinates
+    : refLat && refLng
+    ? [
+        [refLat, refLng],
+        [refLat + 0.005, refLng + 0.006],
+        [refLat + 0.012, refLng + 0.014],
+        [refLat + 0.020, refLng + 0.022],
+      ]
+    : [];
 
   // Compute bounding box
   let minLat = 90;
@@ -172,13 +186,26 @@ export const RouteMapVisualizer: React.FC<RouteMapVisualizerProps> = ({
     });
   });
 
+  if (driverCoords) {
+    if (driverCoords.latitude < minLat) minLat = driverCoords.latitude;
+    if (driverCoords.latitude > maxLat) maxLat = driverCoords.latitude;
+    if (driverCoords.longitude < minLng) minLng = driverCoords.longitude;
+    if (driverCoords.longitude > maxLng) maxLng = driverCoords.longitude;
+  }
+  if (patientCoords) {
+    if (patientCoords.latitude < minLat) minLat = patientCoords.latitude;
+    if (patientCoords.latitude > maxLat) maxLat = patientCoords.latitude;
+    if (patientCoords.longitude < minLng) minLng = patientCoords.longitude;
+    if (patientCoords.longitude > maxLng) maxLng = patientCoords.longitude;
+  }
+
   if (minLat >= maxLat) {
-    minLat = 12.90;
-    maxLat = 13.05;
+    minLat = refLat - 0.03;
+    maxLat = refLat + 0.03;
   }
   if (minLng >= maxLng) {
-    minLng = 77.50;
-    maxLng = 77.75;
+    minLng = refLng - 0.03;
+    maxLng = refLng + 0.03;
   }
 
   // Padding
@@ -438,15 +465,15 @@ export const RouteMapVisualizer: React.FC<RouteMapVisualizerProps> = ({
               </button>
             )}
 
-            {onUseDemoLocation && (
+            {onSetManualLocation && (
               <button
                 type="button"
-                id="btn-use-demo-location"
-                onClick={onUseDemoLocation}
-                className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-lg bg-slate-800 hover:bg-slate-700 text-slate-300 text-xs font-semibold border border-slate-700 transition cursor-pointer"
-                title="Use calibrated simulation coordinates"
+                id="btn-set-manual-location"
+                onClick={() => setShowManualInput(!showManualInput)}
+                className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-lg bg-slate-800 hover:bg-slate-700 text-slate-200 text-xs font-semibold border border-slate-700 transition cursor-pointer"
+                title="Enter custom coordinates manually"
               >
-                <span>Use Demo Location</span>
+                <span>✏️ {showManualInput ? 'Close Input' : 'Enter Manually'}</span>
               </button>
             )}
           </div>
@@ -454,20 +481,81 @@ export const RouteMapVisualizer: React.FC<RouteMapVisualizerProps> = ({
 
         {/* Permission Denied / Error banner */}
         {gpsPermissionStatus === 'denied' && (
-          <div className="mt-2.5 px-3 py-2 bg-red-950/40 rounded-xl border border-red-800/40 flex items-center justify-between text-xs text-red-200">
-            <div className="flex items-center gap-2">
-              <AlertTriangle className="w-4 h-4 text-red-400 shrink-0" />
-              <span>Live location permission is unavailable. Click <strong>Use Demo Location</strong> to simulate realistic GPS positioning.</span>
+          <div className="mt-2.5 px-3.5 py-2.5 bg-red-950/50 rounded-xl border border-red-800/50 text-xs text-red-200 space-y-2">
+            <div className="flex items-center justify-between gap-2 flex-wrap">
+              <div className="flex items-center gap-2">
+                <AlertTriangle className="w-4 h-4 text-red-400 shrink-0" />
+                <span>Location permission was denied. Please allow location access in your browser or enter your coordinates manually below.</span>
+              </div>
+              {onSetManualLocation && (
+                <button
+                  type="button"
+                  onClick={() => setShowManualInput(true)}
+                  className="px-2.5 py-1 rounded bg-red-800 hover:bg-red-700 text-white text-[11px] font-bold shrink-0 cursor-pointer"
+                >
+                  Enter Manually
+                </button>
+              )}
             </div>
-            {onUseDemoLocation && (
+          </div>
+        )}
+
+        {/* Manual Location Form Input (when toggled or permission denied) */}
+        {showManualInput && onSetManualLocation && (
+          <div className="mt-2.5 p-3.5 bg-slate-900/95 rounded-xl border border-slate-700 text-xs space-y-2">
+            <div className="flex items-center justify-between">
+              <span className="font-bold text-slate-200 text-[11px] uppercase tracking-wider">
+                Enter Real / Manual Coordinates
+              </span>
               <button
                 type="button"
-                onClick={onUseDemoLocation}
-                className="ml-2 px-2.5 py-1 rounded bg-red-800 hover:bg-red-700 text-white text-[11px] font-bold shrink-0 cursor-pointer"
+                onClick={() => setShowManualInput(false)}
+                className="text-slate-400 hover:text-white text-xs cursor-pointer"
               >
-                Use Demo Location
+                Cancel
               </button>
-            )}
+            </div>
+            <div className="grid grid-cols-1 sm:grid-cols-3 gap-2 items-end">
+              <div>
+                <label className="text-[10px] text-slate-400 block mb-0.5">Latitude</label>
+                <input
+                  type="number"
+                  step="any"
+                  value={manualLat}
+                  onChange={(e) => setManualLat(e.target.value)}
+                  placeholder={driverCoords?.latitude ? String(driverCoords.latitude) : userCoords?.latitude ? String(userCoords.latitude) : 'Latitude'}
+                  className="w-full px-2.5 py-1.5 bg-slate-950 border border-slate-700 rounded text-white text-xs font-mono outline-none focus:border-blue-500"
+                />
+              </div>
+              <div>
+                <label className="text-[10px] text-slate-400 block mb-0.5">Longitude</label>
+                <input
+                  type="number"
+                  step="any"
+                  value={manualLng}
+                  onChange={(e) => setManualLng(e.target.value)}
+                  placeholder={driverCoords?.longitude ? String(driverCoords.longitude) : userCoords?.longitude ? String(userCoords.longitude) : 'Longitude'}
+                  className="w-full px-2.5 py-1.5 bg-slate-950 border border-slate-700 rounded text-white text-xs font-mono outline-none focus:border-blue-500"
+                />
+              </div>
+              <div>
+                <button
+                  type="button"
+                  onClick={() => {
+                    const lat = parseFloat(manualLat);
+                    const lng = parseFloat(manualLng);
+                    if (!isNaN(lat) && !isNaN(lng)) {
+                      onSetManualLocation(lat, lng);
+                      setShowManualInput(false);
+                    }
+                  }}
+                  disabled={!manualLat || !manualLng}
+                  className="w-full py-1.5 bg-emerald-600 hover:bg-emerald-500 disabled:opacity-50 text-white font-bold text-xs rounded transition cursor-pointer"
+                >
+                  Apply Location
+                </button>
+              </div>
+            </div>
           </div>
         )}
       </div>
@@ -972,6 +1060,21 @@ export const RouteMapVisualizer: React.FC<RouteMapVisualizerProps> = ({
                     {/* Specialty / Type */}
                     <div className="text-xs text-emerald-400 font-semibold mb-1">
                       {h.specialty || h.type || 'Multi-Specialty Trauma Center'}
+                    </div>
+
+                    {/* Emergency Ward Capacity Status Badge */}
+                    <div className="mb-2">
+                      {h.ward_capacity === 'FULL' || h.emergencyWardCapacity === 'FULL' || h.availableEmergencyBeds === 0 ? (
+                        <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-md bg-red-950/80 border border-red-800 text-red-400 text-[10px] font-bold">
+                          <span className="w-1.5 h-1.5 rounded-full bg-red-500 animate-pulse"></span>
+                          Emergency Ward: FULL (Diversion)
+                        </span>
+                      ) : (
+                        <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-md bg-emerald-950/80 border border-emerald-800 text-emerald-400 text-[10px] font-bold">
+                          <span className="w-1.5 h-1.5 rounded-full bg-emerald-500"></span>
+                          Emergency Ward: Available ({h.availableEmergencyBeds || 12} Beds)
+                        </span>
+                      )}
                     </div>
 
                     {/* Address */}

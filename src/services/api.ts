@@ -1,4 +1,4 @@
-import { User, Ambulance, EmergencyRequest, ActivityLog, SystemStats, CreateEmergencyInput, UserRole, EmergencyStatus, AmbulanceStatus, AppNotification } from '../types';
+import { User, Ambulance, EmergencyRequest, ActivityLog, SystemStats, CreateEmergencyInput, UserRole, EmergencyStatus, AmbulanceStatus, AppNotification, HospitalOption, EmergencyReport, Hospital, WardCapacityStatus, AmbulanceRatingInput } from '../types';
 
 const API_BASE = '/api';
 
@@ -82,6 +82,21 @@ export const api = {
     return handleResponse(res);
   },
 
+  // Patient Medical Profile Management
+  async getPatientProfile(userId: number): Promise<{ user: User }> {
+    const res = await fetch(`${API_BASE}/patient/profile/${userId}`);
+    return handleResponse(res);
+  },
+
+  async updatePatientProfile(userId: number, profileData: Partial<User>): Promise<{ user: User; message: string }> {
+    const res = await fetch(`${API_BASE}/patient/profile/${userId}`, {
+      method: 'PUT',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(profileData),
+    });
+    return handleResponse(res);
+  },
+
   // Emergency Requests
   async createEmergency(input: CreateEmergencyInput): Promise<{ message: string; emergency: EmergencyRequest; ambulance?: Ambulance }> {
     const res = await fetch(`${API_BASE}/emergency`, {
@@ -131,6 +146,38 @@ export const api = {
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ status, updated_by, driver_ambulance_id }),
     });
+    return handleResponse(res);
+  },
+
+  // Submit ambulance service & response speed rating
+  async submitEmergencyRating(
+    id: number,
+    data: AmbulanceRatingInput
+  ): Promise<{ message: string; emergency: EmergencyRequest }> {
+    const res = await fetch(`${API_BASE}/emergency/${id}/rating`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(data),
+    });
+    return handleResponse(res);
+  },
+
+  // Automated 2km Proximity Alert Notification API
+  async sendProximityAlert(
+    id: number,
+    data: { distance_km?: number; eta_minutes?: number }
+  ): Promise<{ success: boolean; message: string; distance_km?: number; eta_minutes?: number }> {
+    const res = await fetch(`${API_BASE}/emergency/${id}/proximity-alert`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(data),
+    });
+    return handleResponse(res);
+  },
+
+  // Emergency Patient Report API
+  async getEmergencyReport(id: number): Promise<{ report: EmergencyReport }> {
+    const res = await fetch(`${API_BASE}/emergency/${id}/report`);
     return handleResponse(res);
   },
 
@@ -195,6 +242,32 @@ export const api = {
       radius: (params.radius || 10000).toString(),
     });
     const res = await fetch(`${API_BASE}/nearby-hospitals?${q.toString()}`);
+    return handleResponse(res);
+  },
+
+  async getHospitals(): Promise<{ hospitals: Hospital[] }> {
+    const res = await fetch(`${API_BASE}/hospitals`);
+    return handleResponse(res);
+  },
+
+  async updateHospitalCapacity(
+    id: number | string,
+    ward_capacity: WardCapacityStatus,
+    available_beds?: number
+  ): Promise<{ message: string; hospital: Hospital }> {
+    const res = await fetch(`${API_BASE}/hospitals/${id}/capacity`, {
+      method: 'PATCH',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ ward_capacity, available_beds }),
+    });
+    return handleResponse(res);
+  },
+
+  async toggleHospitalCapacity(id: number | string): Promise<{ message: string; hospital: Hospital }> {
+    const res = await fetch(`${API_BASE}/hospitals/${id}/toggle-capacity`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+    });
     return handleResponse(res);
   },
 
@@ -274,9 +347,111 @@ export const api = {
     return handleResponse(res);
   },
 
+  // Reverse Geocoding API
+  async reverseGeocode(lat: number, lng: number): Promise<{ formattedAddress: string; displayName: string; source: string; latitude: number; longitude: number }> {
+    const res = await fetch(`${API_BASE}/reverse-geocode?lat=${lat}&lng=${lng}`);
+    return handleResponse(res);
+  },
+
+  // Fleet location synchronization with user GPS
+  async syncFleetLocation(data: { latitude: number; longitude: number; address?: string }): Promise<{ message: string; ambulances: Ambulance[] }> {
+    const res = await fetch(`${API_BASE}/fleet/sync-location`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(data),
+    });
+    return handleResponse(res);
+  },
+
+  // IP Location Fallback
+  async getIpLocation(): Promise<{ latitude: number; longitude: number; city: string; region: string; country: string; source: string }> {
+    const res = await fetch(`${API_BASE}/ip-location`);
+    return handleResponse(res);
+  },
+
   // Reset Demo DB
   async resetDatabase(): Promise<{ message: string }> {
     const res = await fetch(`${API_BASE}/demo/reset`, {
+      method: 'POST',
+    });
+    return handleResponse(res);
+  },
+
+  // Voice-to-Text & Symptom Triaging
+  async analyzeSymptoms(payload: { rawTranscript: string; language?: string }): Promise<{
+    success: boolean;
+    source?: string;
+    clinicalSummary: string;
+    recommendedEmergencyType?: string;
+    urgency: 'CRITICAL' | 'HIGH' | 'MEDIUM';
+    symptoms: string[];
+    dispatcherNotes: string;
+    firstAidTip?: string;
+  }> {
+    const res = await fetch(`${API_BASE}/analyze-symptoms`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(payload),
+    });
+    return handleResponse(res);
+  },
+
+  // Update emergency notes (e.g. for active emergencies)
+  async updateEmergencyNotes(id: number, payload: { notes: string; updatedBy?: string }): Promise<{
+    message: string;
+    id: number;
+    notes: string;
+  }> {
+    const res = await fetch(`${API_BASE}/emergency/${id}/notes`, {
+      method: 'PATCH',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(payload),
+    });
+    return handleResponse(res);
+  },
+
+  // IoT Traffic Signal Priority APIs
+  async getTrafficSignalStatus(): Promise<{
+    state: {
+      system: string;
+      currentMode: 'NORMAL_MODE' | 'ROUTE_A_PRIORITY' | 'ROUTE_B_PRIORITY';
+      routeA_Signal: 'GREEN' | 'YELLOW' | 'RED';
+      routeB_Signal: 'GREEN' | 'YELLOW' | 'RED';
+      esp32IpAddress: string;
+      hardwareStatus: 'CONNECTED' | 'SIMULATED' | 'OFFLINE';
+      lastCommand: string;
+      lastUpdated: string;
+      activeEmergencyId: number | null;
+      activeJunctionId: string;
+      priorityDurationSeconds: number;
+    };
+    junctions: any[];
+    recentRequests: any[];
+  }> {
+    const res = await fetch(`${API_BASE}/traffic-signals/status`);
+    return handleResponse(res);
+  },
+
+  async sendTrafficSignalCommand(
+    command: 'GREEN_ROUTE_A' | 'GREEN_ROUTE_B' | 'NORMAL_MODE',
+    options?: { junctionId?: string; emergencyId?: number; durationSeconds?: number }
+  ): Promise<{
+    success: boolean;
+    mode: string;
+    hardwareStatus: string;
+    message: string;
+    state: any;
+  }> {
+    const res = await fetch(`${API_BASE}/traffic-signals/command`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ command, ...options }),
+    });
+    return handleResponse(res);
+  },
+
+  async resetTrafficSignals(): Promise<{ success: boolean; mode: string; message: string }> {
+    const res = await fetch(`${API_BASE}/traffic-signals/reset`, {
       method: 'POST',
     });
     return handleResponse(res);

@@ -73,6 +73,7 @@ function initializeSchema(db: Database) {
   // Create or Migrate EmergencyRequests table
   migrateEmergencyRequestsTable(db);
   ensureRouteOptimizationColumns(db);
+  ensureMedicalProfileColumns(db);
 
   // Create ActivityLogs table for audit trail
   db.run(`
@@ -99,6 +100,25 @@ function initializeSchema(db: Database) {
       created_at TEXT DEFAULT CURRENT_TIMESTAMP,
       FOREIGN KEY (user_id) REFERENCES users(id),
       FOREIGN KEY (emergency_request_id) REFERENCES emergency_requests(id)
+    );
+  `);
+
+  // Create Hospitals table with Emergency Ward Capacity tracking
+  db.run(`
+    CREATE TABLE IF NOT EXISTS hospitals (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      name TEXT UNIQUE NOT NULL,
+      specialty TEXT NOT NULL,
+      address TEXT NOT NULL,
+      latitude REAL NOT NULL,
+      longitude REAL NOT NULL,
+      phone TEXT DEFAULT '+91 108 / 112 Emergency Help',
+      ward_capacity TEXT NOT NULL CHECK(ward_capacity IN ('AVAILABLE', 'FULL')) DEFAULT 'AVAILABLE',
+      available_beds INTEGER DEFAULT 12,
+      total_beds INTEGER DEFAULT 20,
+      rating REAL DEFAULT 4.6,
+      type TEXT DEFAULT 'Multi-Specialty Emergency Hospital',
+      updated_at TEXT DEFAULT CURRENT_TIMESTAMP
     );
   `);
 
@@ -207,12 +227,20 @@ function ensureRouteOptimizationColumns(db: Database) {
       ['current_traffic', 'TEXT'],
       ['hospital_routes', 'TEXT'],
       ['selected_hospital', 'TEXT'],
+      ['hospital_destination', 'TEXT'],
       ['navigation_started', 'INTEGER DEFAULT 0'],
       ['driver_current_latitude', 'REAL'],
       ['driver_current_longitude', 'REAL'],
       ['driver_accuracy', 'REAL'],
       ['navigation_stage', 'TEXT DEFAULT "TO_PATIENT"'],
       ['route_updated_at', 'TEXT'],
+      ['accepted_at', 'TEXT'],
+      ['completed_at', 'TEXT'],
+      ['rating_overall_stars', 'INTEGER'],
+      ['rating_speed_stars', 'INTEGER'],
+      ['rating_service_stars', 'INTEGER'],
+      ['rating_feedback', 'TEXT'],
+      ['rating_submitted_at', 'TEXT'],
     ];
 
     for (const [colName, colType] of columnsToAdd) {
@@ -220,6 +248,26 @@ function ensureRouteOptimizationColumns(db: Database) {
         db.run(`ALTER TABLE emergency_requests ADD COLUMN ${colName} ${colType};`);
       }
     }
+
+    // Ensure traffic_signal_priority_requests table exists
+    db.run(`
+      CREATE TABLE IF NOT EXISTS traffic_signal_priority_requests (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        emergency_id INTEGER,
+        ambulance_id INTEGER,
+        junction_id TEXT NOT NULL,
+        junction_name TEXT NOT NULL,
+        route_direction TEXT NOT NULL,
+        command_sent TEXT NOT NULL,
+        esp32_ip_address TEXT NOT NULL,
+        http_status_code INTEGER,
+        execution_status TEXT NOT NULL DEFAULT 'SENT',
+        priority_duration_seconds INTEGER DEFAULT 25,
+        triggered_by TEXT DEFAULT 'DRIVER_APPROACH',
+        created_at TEXT DEFAULT CURRENT_TIMESTAMP,
+        restored_at TEXT
+      );
+    `);
 
     const ambInfo = db.exec("PRAGMA table_info(ambulances)");
     if (ambInfo && ambInfo[0]?.values) {
@@ -237,6 +285,76 @@ function ensureRouteOptimizationColumns(db: Database) {
     }
   } catch (err) {
     console.error('Error adding route optimization columns:', err);
+  }
+}
+
+function ensureMedicalProfileColumns(db: Database) {
+  try {
+    // 1. Ensure medical profile columns in users table
+    const userTableInfo = db.exec("PRAGMA table_info(users)");
+    if (userTableInfo && userTableInfo[0]?.values) {
+      const userCols = userTableInfo[0].values.map((v: any[]) => v[1] as string);
+      const userColsToAdd: [string, string][] = [
+        ['blood_type', 'TEXT'],
+        ['allergies', 'TEXT'],
+        ['emergency_contact_name', 'TEXT'],
+        ['emergency_contact_phone', 'TEXT'],
+        ['emergency_contact_relation', 'TEXT'],
+        ['medical_notes', 'TEXT'],
+      ];
+      for (const [colName, colType] of userColsToAdd) {
+        if (!userCols.includes(colName)) {
+          db.run(`ALTER TABLE users ADD COLUMN ${colName} ${colType};`);
+        }
+      }
+    }
+
+    // 2. Ensure medical profile snapshot columns in emergency_requests table
+    const reqTableInfo = db.exec("PRAGMA table_info(emergency_requests)");
+    if (reqTableInfo && reqTableInfo[0]?.values) {
+      const reqCols = reqTableInfo[0].values.map((v: any[]) => v[1] as string);
+      const reqColsToAdd: [string, string][] = [
+        ['patient_blood_type', 'TEXT'],
+        ['patient_allergies', 'TEXT'],
+        ['patient_emergency_contact_name', 'TEXT'],
+        ['patient_emergency_contact_phone', 'TEXT'],
+        ['patient_emergency_contact_relation', 'TEXT'],
+        ['patient_medical_notes', 'TEXT'],
+        ['vitals_heart_rate', 'INTEGER'],
+        ['vitals_blood_pressure', 'TEXT'],
+        ['vitals_spo2', 'INTEGER'],
+        ['vitals_respiratory_rate', 'INTEGER'],
+        ['vitals_gcs', 'INTEGER'],
+        ['vitals_blood_sugar', 'INTEGER'],
+        ['triage_acuity', 'TEXT'],
+        ['er_notified_at', 'TEXT'],
+        ['er_prep_notes', 'TEXT'],
+      ];
+      for (const [colName, colType] of reqColsToAdd) {
+        if (!reqCols.includes(colName)) {
+          db.run(`ALTER TABLE emergency_requests ADD COLUMN ${colName} ${colType};`);
+        }
+      }
+    }
+
+    // 3. Seed default medical profile for demo patient Priya Rao (id 1) if not populated
+    try {
+      db.run(`
+        UPDATE users 
+        SET 
+          blood_type = COALESCE(NULLIF(blood_type, ''), 'B+'),
+          allergies = COALESCE(NULLIF(allergies, ''), 'Penicillin, NSAIDs (Aspirin)'),
+          emergency_contact_name = COALESCE(NULLIF(emergency_contact_name, ''), 'Rajesh Rao'),
+          emergency_contact_phone = COALESCE(NULLIF(emergency_contact_phone, ''), '+91 98451 98765'),
+          emergency_contact_relation = COALESCE(NULLIF(emergency_contact_relation, ''), 'Spouse'),
+          medical_notes = COALESCE(NULLIF(medical_notes, ''), 'Mild seasonal asthma; carries inhaler')
+        WHERE id = 1 AND (blood_type IS NULL OR blood_type = '');
+      `);
+    } catch {
+      // ignore
+    }
+  } catch (err) {
+    console.error('Error adding medical profile columns:', err);
   }
 }
 
@@ -302,11 +420,29 @@ export function seedInitialData(db: Database) {
       (3, 'admin', 'Emergency Completed #1', 'Emergency request #1 has been successfully completed and resolved.', 'ADMIN_EMERGENCY_COMPLETED', 1, 1, '${twoHoursAgo}');
     `);
   }
+
+  // Check if hospitals exist
+  const hospCheck = db.exec("SELECT COUNT(*) as count FROM hospitals");
+  const hospCount = hospCheck[0]?.values[0]?.[0] as number;
+
+  if (hospCount === 0) {
+    console.log('Seeding regional hospitals with emergency ward capacity...');
+    db.run(`
+      INSERT INTO hospitals (id, name, specialty, address, latitude, longitude, phone, ward_capacity, available_beds, total_beds, rating, type) VALUES
+      (1, 'Metro Apex Multi-Specialty & Trauma Center', 'Apex Level 1 Trauma & Critical Care', 'MG Road Medical Corridor, Bengaluru', 12.9755, 77.5980, '+91 80 2558 1008', 'AVAILABLE', 14, 25, 4.8, 'Apex Level 1 Trauma Hospital'),
+      (2, 'Regional Cardiac & Critical Care Hospital', 'Apex Interventional Cardiology & Cardiac ICU', 'Indiranagar 100ft Road, Bengaluru', 12.9784, 77.6408, '+91 80 2520 2044', 'AVAILABLE', 8, 18, 4.7, 'Specialized Cardiac Hospital'),
+      (3, 'City General Emergency Hospital', 'Comprehensive Emergency & Advanced ICU', 'Jayanagar 4th Block, Bengaluru', 12.9250, 77.5938, '+91 80 2656 3091', 'FULL', 0, 30, 4.4, 'Public Emergency Hospital'),
+      (4, 'Apollo Emergency & Trauma Hospital', '24/7 Emergency & Critical Trauma Hub', 'Bannerghatta Main Road, Bengaluru', 12.8950, 77.5975, '+91 80 2630 4412', 'AVAILABLE', 16, 28, 4.9, 'Super-Specialty Trauma Center'),
+      (5, 'Manipal Comprehensive Emergency Hub', 'Level 1 Trauma, Neuro & Cardiac Emergency', 'Old Airport Road, Kodihalli, Bengaluru', 12.9582, 77.6485, '+91 80 2502 5500', 'AVAILABLE', 11, 24, 4.8, 'Multi-Specialty Emergency Hospital'),
+      (6, 'Fortis Memorial Critical Care', 'Super-Specialty Emergency & ICU', 'Cunningham Road, Vasanth Nagar, Bengaluru', 12.9860, 77.5970, '+91 80 4044 6600', 'FULL', 0, 20, 4.6, 'Super-Specialty Emergency Center');
+    `);
+  }
 }
 
 // Reset database to default clean state
 export async function resetDatabase(): Promise<void> {
   const db = await getDb();
+  db.run(`DROP TABLE IF EXISTS hospitals;`);
   db.run(`DROP TABLE IF EXISTS notifications;`);
   db.run(`DROP TABLE IF EXISTS activity_logs;`);
   db.run(`DROP TABLE IF EXISTS emergency_requests;`);

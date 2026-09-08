@@ -1,10 +1,12 @@
 import express from 'express';
 import cors from 'cors';
+import http from 'http';
 import path from 'path';
 import { fileURLToPath } from 'url';
 import { createServer as createViteServer } from 'vite';
 import { apiRouter } from './server/routes.js';
 import { getDb } from './server/db.js';
+import { initializeSocketIO } from './server/sockets/socketHandler.js';
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
@@ -12,6 +14,10 @@ const __dirname = path.dirname(__filename);
 async function startServer() {
   const app = express();
   const PORT = 3000;
+  const httpServer = http.createServer(app);
+
+  // Initialize real-time Socket.IO communication
+  const io = initializeSocketIO(httpServer);
 
   // Initialize SQLite database on startup
   try {
@@ -62,7 +68,7 @@ async function startServer() {
     });
   }
 
-  app.listen(PORT, '0.0.0.0', () => {
+  httpServer.listen(PORT, '0.0.0.0', () => {
     console.log(`🚑 Arogyavahini Server listening at http://0.0.0.0:${PORT}`);
   });
 }

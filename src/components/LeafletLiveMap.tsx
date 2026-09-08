@@ -1,7 +1,8 @@
 import React, { useEffect, useRef } from 'react';
-import L from 'leaflet';
+import L from '../utils/leafletPatch';
 import { RouteOption, HospitalOption } from '../types';
 import { formatMinutes, formatDistance, getTrafficBadgeClass } from '../utils/routeOptimizer';
+import { useLocation } from '../context/LocationContext';
 
 interface LeafletLiveMapProps {
   routes: RouteOption[];
@@ -32,6 +33,7 @@ export const LeafletLiveMap: React.FC<LeafletLiveMapProps> = ({
   onSelectHospital,
   isLiveTracking = false,
 }) => {
+  const { userCoords } = useLocation();
   const mapContainerRef = useRef<HTMLDivElement | null>(null);
   const mapInstanceRef = useRef<L.Map | null>(null);
   const polylinesLayerRef = useRef<L.LayerGroup | null>(null);
@@ -45,10 +47,18 @@ export const LeafletLiveMap: React.FC<LeafletLiveMapProps> = ({
     if (!mapContainerRef.current) return;
 
     if (!mapInstanceRef.current) {
+      if ((mapContainerRef.current as any)._leaflet_id) {
+        delete (mapContainerRef.current as any)._leaflet_id;
+      }
+
+      const initialLat = driverCoords?.latitude || patientCoords?.latitude || userCoords?.latitude || activeRoute?.coordinates?.[0]?.[0] || 12.9716;
+      const initialLng = driverCoords?.longitude || patientCoords?.longitude || userCoords?.longitude || activeRoute?.coordinates?.[0]?.[1] || 77.5946;
+      const initialZoom = 14;
+
       const map = L.map(mapContainerRef.current, {
         zoomControl: false,
         attributionControl: false,
-      }).setView([12.9716, 77.5946], 13);
+      }).setView([initialLat, initialLng], initialZoom);
 
       L.control.zoom({ position: 'topright' }).addTo(map);
 
@@ -65,11 +75,37 @@ export const LeafletLiveMap: React.FC<LeafletLiveMapProps> = ({
 
     return () => {
       if (mapInstanceRef.current) {
-        mapInstanceRef.current.remove();
+        try {
+          mapInstanceRef.current.stop();
+          mapInstanceRef.current.remove();
+        } catch {
+          // safe cleanup
+        }
         mapInstanceRef.current = null;
+      }
+      polylinesLayerRef.current = null;
+      markersLayerRef.current = null;
+      ambulanceMarkerRef.current = null;
+      if (mapContainerRef.current && (mapContainerRef.current as any)._leaflet_id) {
+        delete (mapContainerRef.current as any)._leaflet_id;
       }
     };
   }, []);
+
+  // Center map on user's live browser coordinates as soon as geolocation arrives
+  useEffect(() => {
+    const map = mapInstanceRef.current;
+    if (!map) return;
+    const currentLat = driverCoords?.latitude || patientCoords?.latitude || userCoords?.latitude;
+    const currentLng = driverCoords?.longitude || patientCoords?.longitude || userCoords?.longitude;
+    if (currentLat && currentLng && (!routes || routes.length === 0)) {
+      try {
+        map.setView([currentLat, currentLng], 15, { animate: false });
+      } catch {
+        // safe fallback
+      }
+    }
+  }, [driverCoords?.latitude, driverCoords?.longitude, patientCoords?.latitude, patientCoords?.longitude, userCoords?.latitude, userCoords?.longitude, routes?.length]);
 
   // Update Polylines and Markers whenever routes, active route, or coords change
   useEffect(() => {
@@ -152,8 +188,8 @@ export const LeafletLiveMap: React.FC<LeafletLiveMapProps> = ({
     }
 
     // Determine Ambulance Location (GPS coordinates if live, else route origin)
-    let ambLat: number;
-    let ambLng: number;
+    let ambLat: number | null = null;
+    let ambLng: number | null = null;
 
     if (driverCoords && driverCoords.latitude && driverCoords.longitude) {
       ambLat = driverCoords.latitude;
@@ -161,45 +197,50 @@ export const LeafletLiveMap: React.FC<LeafletLiveMapProps> = ({
     } else if (activeRoute && activeRoute.coordinates && activeRoute.coordinates.length > 0) {
       ambLat = activeRoute.coordinates[0][0];
       ambLng = activeRoute.coordinates[0][1];
-    } else {
-      ambLat = 12.9716;
-      ambLng = 77.5946;
+    } else if (patientCoords && patientCoords.latitude && patientCoords.longitude) {
+      ambLat = patientCoords.latitude - 0.012;
+      ambLng = patientCoords.longitude - 0.010;
+    } else if (userCoords && userCoords.latitude && userCoords.longitude) {
+      ambLat = userCoords.latitude - 0.012;
+      ambLng = userCoords.longitude - 0.010;
     }
 
-    allPoints.push([ambLat, ambLng]);
+    if (ambLat !== null && ambLng !== null) {
+      allPoints.push([ambLat, ambLng]);
 
-    // Create Ambulance Marker with Live Beacon & Siren Pulse
-    const ambulanceIcon = L.divIcon({
-      className: 'custom-ambulance-marker',
-      html: `
-        <div style="position: relative; width: 44px; height: 44px; display: flex; align-items: center; justify-content: center;">
-          <div style="position: absolute; width: 40px; height: 40px; border-radius: 50%; background: rgba(16, 185, 129, 0.35); animation: ping 1.5s cubic-bezier(0, 0, 0.2, 1) infinite;"></div>
-          <div style="position: relative; width: 34px; height: 34px; background: #0f172a; border: 2.5px solid #10b981; border-radius: 10px; display: flex; align-items: center; justify-content: center; box-shadow: 0 4px 12px rgba(0,0,0,0.4);">
-            <span style="font-size: 17px;">🚑</span>
+      // Create Ambulance Marker with Live Beacon & Siren Pulse
+      const ambulanceIcon = L.divIcon({
+        className: 'custom-ambulance-marker',
+        html: `
+          <div style="position: relative; width: 44px; height: 44px; display: flex; align-items: center; justify-content: center;">
+            <div style="position: absolute; width: 40px; height: 40px; border-radius: 50%; background: rgba(16, 185, 129, 0.35); animation: ping 1.5s cubic-bezier(0, 0, 0.2, 1) infinite;"></div>
+            <div style="position: relative; width: 34px; height: 34px; background: #0f172a; border: 2.5px solid #10b981; border-radius: 10px; display: flex; align-items: center; justify-content: center; box-shadow: 0 4px 12px rgba(0,0,0,0.4);">
+              <span style="font-size: 17px;">🚑</span>
+            </div>
+            <div style="position: absolute; -top: 18px; background: #047857; color: #ffffff; font-size: 9px; font-weight: 800; padding: 1px 6px; border-radius: 4px; white-space: nowrap; box-shadow: 0 2px 4px rgba(0,0,0,0.3);">
+              ${isLiveTracking ? 'LIVE GPS' : 'AMBULANCE'}
+            </div>
           </div>
-          <div style="position: absolute; -top: 18px; background: #047857; color: #ffffff; font-size: 9px; font-weight: 800; padding: 1px 6px; border-radius: 4px; white-space: nowrap; box-shadow: 0 2px 4px rgba(0,0,0,0.3);">
-            ${isLiveTracking ? 'LIVE GPS' : 'AMBULANCE'}
-          </div>
+        `,
+        iconSize: [44, 44],
+        iconAnchor: [22, 22],
+      });
+
+      const ambMarker = L.marker([ambLat, ambLng], { icon: ambulanceIcon }).addTo(markersLayer);
+      ambMarker.bindPopup(`
+        <div style="font-family: sans-serif; font-size: 12px; line-height: 1.4;">
+          <strong style="color: #059669;">🚑 Dispatched Emergency Ambulance</strong><br/>
+          <strong>Base/GPS:</strong> ${originName}<br/>
+          <strong>Status:</strong> ${isLiveTracking ? '🟢 Live GPS Streaming' : 'Ready & Navigating'}<br/>
+          <strong>Coords:</strong> ${ambLat.toFixed(5)}, ${ambLng.toFixed(5)}
         </div>
-      `,
-      iconSize: [44, 44],
-      iconAnchor: [22, 22],
-    });
-
-    const ambMarker = L.marker([ambLat, ambLng], { icon: ambulanceIcon }).addTo(markersLayer);
-    ambMarker.bindPopup(`
-      <div style="font-family: sans-serif; font-size: 12px; line-height: 1.4;">
-        <strong style="color: #059669;">🚑 Dispatched Emergency Ambulance</strong><br/>
-        <strong>Base/GPS:</strong> ${originName}<br/>
-        <strong>Status:</strong> ${isLiveTracking ? '🟢 Live GPS Streaming' : 'Ready & Navigating'}<br/>
-        <strong>Coords:</strong> ${ambLat.toFixed(5)}, ${ambLng.toFixed(5)}
-      </div>
-    `);
-    ambulanceMarkerRef.current = ambMarker;
+      `);
+      ambulanceMarkerRef.current = ambMarker;
+    }
 
     // Determine Destination Location (Patient SOS or Hospital)
-    let destLat: number;
-    let destLng: number;
+    let destLat: number | null = null;
+    let destLng: number | null = null;
 
     if (patientCoords && patientCoords.latitude && patientCoords.longitude) {
       destLat = patientCoords.latitude;
@@ -208,79 +249,127 @@ export const LeafletLiveMap: React.FC<LeafletLiveMapProps> = ({
       const last = activeRoute.coordinates[activeRoute.coordinates.length - 1];
       destLat = last[0];
       destLng = last[1];
-    } else {
-      destLat = 12.9756;
-      destLng = 77.6066;
+    } else if (driverCoords && driverCoords.latitude && driverCoords.longitude) {
+      destLat = driverCoords.latitude + 0.015;
+      destLng = driverCoords.longitude + 0.012;
+    } else if (userCoords && userCoords.latitude && userCoords.longitude) {
+      destLat = userCoords.latitude;
+      destLng = userCoords.longitude;
     }
 
-    allPoints.push([destLat, destLng]);
+    if (destLat !== null && destLng !== null) {
+      allPoints.push([destLat, destLng]);
 
-    // Create Destination / Patient Marker
-    const isPatientStage = stage === 'TO_PATIENT';
-    const destIcon = L.divIcon({
-      className: 'custom-destination-marker',
-      html: `
-        <div style="position: relative; width: 44px; height: 44px; display: flex; align-items: center; justify-content: center;">
-          <div style="position: absolute; width: 42px; height: 42px; border-radius: 50%; background: ${isPatientStage ? 'rgba(239, 68, 68, 0.4)' : 'rgba(59, 130, 246, 0.4)'}; animation: ping 1.8s cubic-bezier(0, 0, 0.2, 1) infinite;"></div>
-          <div style="position: relative; width: 34px; height: 34px; background: ${isPatientStage ? '#dc2626' : '#2563eb'}; border: 2.5px solid #ffffff; border-radius: 50%; display: flex; align-items: center; justify-content: center; box-shadow: 0 4px 12px rgba(0,0,0,0.4); color: white; font-weight: 900; font-size: 16px;">
-            ${isPatientStage ? '🆘' : '🏥'}
+      // Create Destination / Patient Marker
+      const isPatientStage = stage === 'TO_PATIENT';
+      const destIcon = L.divIcon({
+        className: 'custom-destination-marker',
+        html: `
+          <div style="position: relative; width: 44px; height: 44px; display: flex; align-items: center; justify-content: center;">
+            <div style="position: absolute; width: 42px; height: 42px; border-radius: 50%; background: ${isPatientStage ? 'rgba(239, 68, 68, 0.4)' : 'rgba(59, 130, 246, 0.4)'}; animation: ping 1.8s cubic-bezier(0, 0, 0.2, 1) infinite;"></div>
+            <div style="position: relative; width: 34px; height: 34px; background: ${isPatientStage ? '#dc2626' : '#2563eb'}; border: 2.5px solid #ffffff; border-radius: 50%; display: flex; align-items: center; justify-content: center; box-shadow: 0 4px 12px rgba(0,0,0,0.4); color: white; font-weight: 900; font-size: 16px;">
+              ${isPatientStage ? '🆘' : '🏥'}
+            </div>
+            <div style="position: absolute; -top: 18px; background: ${isPatientStage ? '#991b1b' : '#1e40af'}; color: #ffffff; font-size: 9px; font-weight: 800; padding: 1px 6px; border-radius: 4px; white-space: nowrap; box-shadow: 0 2px 4px rgba(0,0,0,0.3);">
+              ${isPatientStage ? 'PATIENT SOS' : 'HOSPITAL'}
+            </div>
           </div>
-          <div style="position: absolute; -top: 18px; background: ${isPatientStage ? '#991b1b' : '#1e40af'}; color: #ffffff; font-size: 9px; font-weight: 800; padding: 1px 6px; border-radius: 4px; white-space: nowrap; box-shadow: 0 2px 4px rgba(0,0,0,0.3);">
-            ${isPatientStage ? 'PATIENT SOS' : 'HOSPITAL'}
-          </div>
+        `,
+        iconSize: [44, 44],
+        iconAnchor: [22, 22],
+      });
+
+      const destMarker = L.marker([destLat, destLng], { icon: destIcon }).addTo(markersLayer);
+      destMarker.bindPopup(`
+        <div style="font-family: sans-serif; font-size: 12px; line-height: 1.4;">
+          <strong style="color: ${isPatientStage ? '#dc2626' : '#2563eb'};">${isPatientStage ? '🆘 Patient Incident Location' : '🏥 Hospital Facility'}</strong><br/>
+          <strong>Destination:</strong> ${destinationName}<br/>
+          <strong>Target Coords:</strong> ${destLat.toFixed(5)}, ${destLng.toFixed(5)}
         </div>
-      `,
-      iconSize: [44, 44],
-      iconAnchor: [22, 22],
-    });
+      `);
+    }
 
-    const destMarker = L.marker([destLat, destLng], { icon: destIcon }).addTo(markersLayer);
-    destMarker.bindPopup(`
-      <div style="font-family: sans-serif; font-size: 12px; line-height: 1.4;">
-        <strong style="color: ${isPatientStage ? '#dc2626' : '#2563eb'};">${isPatientStage ? '🆘 Patient Incident Location' : '🏥 Hospital Facility'}</strong><br/>
-        <strong>Destination:</strong> ${destinationName}<br/>
-        <strong>Target Coords:</strong> ${destLat.toFixed(5)}, ${destLng.toFixed(5)}
-      </div>
-    `);
-
-    // Render Hospital Markers if in Hospital stage
-    if (stage === 'TO_HOSPITAL' && hospitals.length > 0) {
+    // Render Hospital Markers with Emergency Ward Capacity Color Coding (Available vs Full)
+    if (hospitals.length > 0) {
       hospitals.forEach((h) => {
         if (!h.coordinates) return;
         const isChosen = selectedHospital === h.name;
+        const isFull = h.ward_capacity === 'FULL' || h.emergencyWardCapacity === 'FULL' || h.availableEmergencyBeds === 0;
+        const statusColor = isFull ? '#dc2626' : '#059669';
+        const statusBg = isFull ? '#fee2e2' : '#d1fae5';
+        const statusText = isFull ? '#991b1b' : '#065f46';
+        const badgeLabel = isFull ? 'FULL' : 'AVAIL';
+
         const hospIcon = L.divIcon({
           className: 'custom-hosp-marker',
           html: `
-            <div style="position: relative; width: 32px; height: 32px; display: flex; align-items: center; justify-content: center;">
-              <div style="width: 26px; height: 26px; background: ${isChosen ? '#059669' : '#334155'}; border: 2px solid #ffffff; border-radius: 6px; display: flex; align-items: center; justify-content: center; font-size: 13px; box-shadow: 0 2px 8px rgba(0,0,0,0.3);">
-                🏥
+            <div style="position: relative; width: 34px; height: 34px; display: flex; align-items: center; justify-content: center;">
+              <div style="width: 30px; height: 30px; background: ${statusColor}; border: ${isChosen ? '3px solid #fbbf24' : '2px solid #ffffff'}; border-radius: 8px; display: flex; flex-direction: column; align-items: center; justify-content: center; box-shadow: 0 3px 10px ${isFull ? 'rgba(220,38,38,0.5)' : 'rgba(5,150,105,0.45)'};">
+                <span style="color: #ffffff; font-size: 12px; font-weight: 900; line-height: 1;">H</span>
+                <span style="color: #ffffff; font-size: 7px; font-weight: 900; text-transform: uppercase; line-height: 1; margin-top: 1px;">${badgeLabel}</span>
               </div>
+              <span style="position: absolute; top: -2px; right: -2px; width: 9px; height: 9px; background: ${isFull ? '#ef4444' : '#10b981'}; border: 1.5px solid #ffffff; border-radius: 50%;"></span>
             </div>
           `,
-          iconSize: [32, 32],
-          iconAnchor: [16, 16],
+          iconSize: [34, 34],
+          iconAnchor: [17, 17],
         });
 
         const hMarker = L.marker([h.coordinates[0], h.coordinates[1]], { icon: hospIcon }).addTo(markersLayer);
         hMarker.bindPopup(`
-          <div style="font-family: sans-serif; font-size: 12px;">
-            <strong style="color: #059669;">${h.name}</strong><br/>
-            <strong>Specialty:</strong> ${h.specialty}<br/>
-            <strong>ICU Beds:</strong> ${h.availableEmergencyBeds}<br/>
-            <strong>ETA:</strong> ${formatMinutes(h.estimatedMinutes)} (${formatDistance(h.distanceKm)})<br/>
-            <button style="margin-top: 4px; background: #059669; color: white; border: none; padding: 3px 8px; border-radius: 4px; font-size: 11px; cursor: pointer;" onclick="window.selectHospitalByName && window.selectHospitalByName('${h.name}')">Select Hospital</button>
+          <div style="font-family: sans-serif; font-size: 12px; line-height: 1.4; min-width: 190px;">
+            <div style="margin-bottom: 3px;">
+              <strong style="color: #0f172a; font-size: 13px;">🏥 ${h.name}</strong>
+            </div>
+            <div style="display: inline-block; padding: 2px 6px; border-radius: 4px; font-size: 10px; font-weight: bold; background: ${statusBg}; color: ${statusText}; margin-bottom: 5px;">
+              ${isFull ? '🔴 Ward: FULL (Diversion Mode)' : `🟢 Ward: AVAILABLE (${h.availableEmergencyBeds || 12} Beds)`}
+            </div><br/>
+            <strong>Specialty:</strong> ${h.specialty || 'Critical Care'}<br/>
+            <strong>Distance:</strong> ${formatDistance(h.distanceKm)} (~${formatMinutes(h.estimatedMinutes)})<br/>
+            ${isFull ? '<div style="margin: 4px 0; font-size: 10.5px; color: #dc2626; font-weight: 600;">⚠️ Emergency ward capacity saturated. Alternate hospital recommended.</div>' : ''}
+            <button 
+              style="margin-top: 5px; width: 100%; background: ${isFull ? '#dc2626' : '#059669'}; color: white; border: none; padding: 5px 8px; border-radius: 6px; font-size: 11px; font-weight: bold; cursor: pointer;" 
+              onclick="window.selectHospitalByName && window.selectHospitalByName('${h.name}')"
+            >
+              ${isChosen ? '✓ Currently Selected Destination' : (isFull ? 'Select Anyway (Diversion Mode)' : 'Select as Destination')}
+            </button>
           </div>
         `);
         allPoints.push([h.coordinates[0], h.coordinates[1]]);
       });
     }
 
-    // Auto fit bounds
-    if (allPoints.length > 0) {
-      const bounds = L.latLngBounds(allPoints);
-      map.fitBounds(bounds, { padding: [45, 45], maxZoom: 15 });
+    // Auto fit bounds or center
+    if (allPoints.length > 1) {
+      try {
+        const bounds = L.latLngBounds(allPoints);
+        map.fitBounds(bounds, { padding: [45, 45], maxZoom: 15, animate: false });
+      } catch {
+        // safe fallback
+      }
+    } else if (allPoints.length === 1) {
+      try {
+        map.setView(allPoints[0], 15, { animate: false });
+      } catch {
+        // safe fallback
+      }
     }
-  }, [routes, activeRouteId, driverCoords, patientCoords, originName, destinationName, stage, hospitals, selectedHospital, isLiveTracking]);
+  }, [
+    routes, 
+    activeRouteId, 
+    driverCoords?.latitude, 
+    driverCoords?.longitude, 
+    patientCoords?.latitude, 
+    patientCoords?.longitude, 
+    userCoords?.latitude, 
+    userCoords?.longitude, 
+    originName, 
+    destinationName, 
+    stage, 
+    hospitals, 
+    selectedHospital, 
+    isLiveTracking
+  ]);
 
   // Provide global helper for popup hospital selection
   useEffect(() => {
@@ -296,10 +385,14 @@ export const LeafletLiveMap: React.FC<LeafletLiveMapProps> = ({
   const handleCenterAmbulance = () => {
     const map = mapInstanceRef.current;
     if (!map) return;
-    if (driverCoords && driverCoords.latitude && driverCoords.longitude) {
-      map.setView([driverCoords.latitude, driverCoords.longitude], 15, { animate: true });
-    } else if (activeRoute && activeRoute.coordinates && activeRoute.coordinates.length > 0) {
-      map.setView([activeRoute.coordinates[0][0], activeRoute.coordinates[0][1]], 15, { animate: true });
+    try {
+      if (driverCoords && driverCoords.latitude && driverCoords.longitude) {
+        map.setView([driverCoords.latitude, driverCoords.longitude], 15, { animate: false });
+      } else if (activeRoute && activeRoute.coordinates && activeRoute.coordinates.length > 0) {
+        map.setView([activeRoute.coordinates[0][0], activeRoute.coordinates[0][1]], 15, { animate: false });
+      }
+    } catch {
+      // safe fallback
     }
   };
 
@@ -307,8 +400,12 @@ export const LeafletLiveMap: React.FC<LeafletLiveMapProps> = ({
   const handleCenterRoute = () => {
     const map = mapInstanceRef.current;
     if (!map || !activeRoute || !activeRoute.coordinates || activeRoute.coordinates.length === 0) return;
-    const bounds = L.latLngBounds(activeRoute.coordinates.map((pt) => [pt[0], pt[1]]));
-    map.fitBounds(bounds, { padding: [45, 45], animate: true });
+    try {
+      const bounds = L.latLngBounds(activeRoute.coordinates.map((pt) => [pt[0], pt[1]]));
+      map.fitBounds(bounds, { padding: [45, 45], animate: false });
+    } catch {
+      // safe fallback
+    }
   };
 
   return (

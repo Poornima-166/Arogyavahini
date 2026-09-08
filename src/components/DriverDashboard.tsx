@@ -2,12 +2,18 @@ import React, { useState, useEffect } from 'react';
 import { useAuth } from '../context/AuthContext';
 import { useLanguage } from '../context/LanguageContext';
 import { useNotifications } from '../context/NotificationContext';
+import { useLocation } from '../context/LocationContext';
 import { api } from '../services/api';
-import { Ambulance, EmergencyRequest, EmergencyStatus, AmbulanceStatus } from '../types';
+import { Ambulance, EmergencyRequest, EmergencyStatus, AmbulanceStatus, HospitalOption } from '../types';
 import { soundEffects } from '../utils/sound';
 import { generateClientFallbackRoutes } from '../utils/routeOptimizer';
 import { EmergencyStatusStepper } from './EmergencyStatusStepper';
 import { RouteMapVisualizer } from './RouteMapVisualizer';
+import { VoiceNavigationHUD } from './VoiceNavigationHUD';
+import { TrafficSignalHUD } from './TrafficSignalHUD';
+import { EmergencyReportModal } from './EmergencyReportModal';
+import { LiveFleetRadar } from './LiveFleetRadar';
+import { InTransitVitalsModal } from './InTransitVitalsModal';
 import { 
   Truck, 
   MapPin, 
@@ -25,7 +31,12 @@ import {
   Check,
   BellRing,
   AlertCircle,
-  Sparkles
+  Sparkles,
+  FileText,
+  Download,
+  Heart,
+  Users,
+  Activity
 } from 'lucide-react';
 
 export const DriverDashboard: React.FC = () => {
@@ -40,6 +51,9 @@ export const DriverDashboard: React.FC = () => {
   const [isUpdating, setIsUpdating] = useState(false);
   const [acceptingId, setAcceptingId] = useState<number | null>(null);
   const [isLoading, setIsLoading] = useState(true);
+  const [isVitalsModalOpen, setIsVitalsModalOpen] = useState(false);
+
+  const { userCoords, locationPermission, lastGpsTimestamp: contextGpsTimestamp } = useLocation();
 
   // Live GPS Geolocation Tracking for Driver
   const [driverCoords, setDriverCoords] = useState<{
@@ -48,13 +62,46 @@ export const DriverDashboard: React.FC = () => {
     speed?: number | null;
     heading?: number | null;
     accuracy?: number;
-  } | null>(null);
-  const [isTrackingGPS, setIsTrackingGPS] = useState(false);
-  const [gpsPermissionStatus, setGpsPermissionStatus] = useState<'granted' | 'denied' | 'prompt' | 'unavailable' | 'demo'>('prompt');
-  const [lastGpsTimestamp, setLastGpsTimestamp] = useState<string | null>(null);
+  } | null>(
+    userCoords
+      ? {
+          latitude: userCoords.latitude,
+          longitude: userCoords.longitude,
+          accuracy: userCoords.accuracy,
+        }
+      : null
+  );
+  const [isTrackingGPS, setIsTrackingGPS] = useState(Boolean(userCoords));
+  const [gpsPermissionStatus, setGpsPermissionStatus] = useState<'granted' | 'denied' | 'prompt' | 'unavailable' | 'demo'>(
+    locationPermission === 'granted' ? 'granted' : locationPermission === 'denied' ? 'denied' : 'prompt'
+  );
+  const [lastGpsTimestamp, setLastGpsTimestamp] = useState<string | null>(contextGpsTimestamp || null);
+
+  useEffect(() => {
+    if (userCoords && !driverCoords) {
+      setDriverCoords({
+        latitude: userCoords.latitude,
+        longitude: userCoords.longitude,
+        accuracy: userCoords.accuracy,
+      });
+      setGpsPermissionStatus(locationPermission === 'granted' ? 'granted' : locationPermission === 'denied' ? 'denied' : 'prompt');
+      setIsTrackingGPS(true);
+      if (contextGpsTimestamp) {
+        setLastGpsTimestamp(contextGpsTimestamp);
+      }
+    }
+  }, [userCoords, locationPermission, contextGpsTimestamp]);
   const [isSearchingHospitals, setIsSearchingHospitals] = useState(false);
   const [hospitalSearchSource, setHospitalSearchSource] = useState<'live_places' | 'fallback' | null>(null);
   const [hospitalSearchMessage, setHospitalSearchMessage] = useState<string | null>(null);
+  const [reportModalEmergencyId, setReportModalEmergencyId] = useState<number | null>(null);
+  const [fallbackReportEmergency, setFallbackReportEmergency] = useState<EmergencyRequest | undefined>(undefined);
+
+  const openReportModal = (id: number, emergency?: EmergencyRequest) => {
+    setReportModalEmergencyId(id);
+    setFallbackReportEmergency(emergency);
+  };
+
   const lastLocationSendTimeRef = React.useRef<number>(0);
   const watchIdRef = React.useRef<number | null>(null);
 
@@ -103,36 +150,56 @@ export const DriverDashboard: React.FC = () => {
         console.warn('Geolocation error:', err);
         if (err.code === 1) {
           setGpsPermissionStatus('denied');
-          showToast('Location permission denied. Click "Use Demo Location" to proceed.', 'error');
+          showToast('Location permission denied. Please allow location access or enter coordinates manually.', 'error');
         } else {
           setGpsPermissionStatus('unavailable');
-          showToast('Unable to acquire GPS signal. Using fallback.', 'info');
+          showToast('Unable to acquire GPS signal. You can enter location manually.', 'info');
         }
       },
       { enableHighAccuracy: true, timeout: 10000, maximumAge: 0 }
     );
   };
 
-  const handleUseDemoLocation = () => {
-    const demoCoords = {
-      latitude: 12.9716,
-      longitude: 77.5946,
-      accuracy: 5,
+  // Request browser geolocation permission immediately on initial mount
+  useEffect(() => {
+    if (navigator.geolocation && !driverCoords) {
+      handleEnableLiveLocation();
+    }
+  }, []);
+
+  const handleSetManualLocation = (lat: number, lng: number) => {
+    const coords = {
+      latitude: lat,
+      longitude: lng,
+      accuracy: 10,
     };
-    setDriverCoords(demoCoords);
-    setGpsPermissionStatus('demo');
+    setDriverCoords(coords);
+    setGpsPermissionStatus('granted');
     setLastGpsTimestamp(new Date().toLocaleTimeString());
     setIsTrackingGPS(true);
-    showToast('Simulation Demo Location activated (12.9716, 77.5946)', 'info');
+    showToast(`📍 Ambulance location updated manually: [${lat.toFixed(4)}, ${lng.toFixed(4)}]`, 'success');
 
     const activeMission = assignedEmergencies.find((e) =>
       ['DRIVER_ACCEPTED', 'ON_THE_WAY', 'REACHED'].includes(e.status)
     );
     if (activeMission) {
       api.updateDriverLocation(activeMission.id, {
-        latitude: demoCoords.latitude,
-        longitude: demoCoords.longitude,
-        accuracy: demoCoords.accuracy,
+        latitude: coords.latitude,
+        longitude: coords.longitude,
+        accuracy: coords.accuracy,
+      }).catch(console.warn);
+
+      api.recalculateRoute(activeMission.id, {
+        originLatitude: coords.latitude,
+        originLongitude: coords.longitude,
+      }).catch(console.warn);
+
+      api.findNearbyHospitals(activeMission.id, {
+        latitude: coords.latitude,
+        longitude: coords.longitude,
+      }).then((res) => {
+        setHospitalSearchSource(res.source);
+        setHospitalSearchMessage(res.message);
       }).catch(console.warn);
     }
   };
@@ -181,14 +248,6 @@ export const DriverDashboard: React.FC = () => {
             },
             (err) => {
               console.warn('Geolocation watch error:', err.message);
-              // Fallback to sample coordinates around Bangalore center if device GPS is blocked
-              if (!driverCoords) {
-                setDriverCoords({
-                  latitude: 12.9716,
-                  longitude: 77.5946,
-                  accuracy: 10,
-                });
-              }
             },
             {
               enableHighAccuracy: true,
@@ -333,7 +392,10 @@ export const DriverDashboard: React.FC = () => {
   const handleRecalculateRoute = async (emergencyId: number) => {
     setIsRecalculatingRoute(true);
     try {
-      const res = await api.recalculateRoute(emergencyId);
+      const res = await api.recalculateRoute(emergencyId, {
+        originLatitude: driverCoords?.latitude,
+        originLongitude: driverCoords?.longitude,
+      });
       showToast(res.message || 'AI route recalculation complete!', 'success');
       await loadDriverData();
     } catch (e: any) {
@@ -560,6 +622,23 @@ export const DriverDashboard: React.FC = () => {
                       <strong className="text-slate-700 dark:text-slate-200">{t.notes}:</strong> {req.notes}
                     </div>
                   )}
+
+                  {(req.patient_blood_type || req.patient_allergies) && (
+                    <div className="flex flex-wrap items-center gap-1.5 pt-1 border-t border-slate-200 dark:border-slate-700">
+                      {req.patient_blood_type && (
+                        <span className="px-2 py-0.5 rounded bg-red-100 dark:bg-red-950/60 text-red-700 dark:text-red-300 font-black text-[10px] flex items-center gap-1">
+                          <Heart className="w-2.5 h-2.5 fill-red-600 text-red-600" />
+                          Blood: {req.patient_blood_type}
+                        </span>
+                      )}
+                      {req.patient_allergies && (
+                        <span className="px-2 py-0.5 rounded bg-amber-100 dark:bg-amber-950/60 text-amber-800 dark:text-amber-300 font-semibold text-[10px] flex items-center gap-1">
+                          <AlertTriangle className="w-2.5 h-2.5 text-amber-600" />
+                          Allergies: {req.patient_allergies}
+                        </span>
+                      )}
+                    </div>
+                  )}
                 </div>
 
                 {/* Accept Button */}
@@ -655,6 +734,66 @@ export const DriverDashboard: React.FC = () => {
               </div>
             </div>
 
+            {/* Patient Clinical Profile & Next of Kin Contact Bar */}
+            <div className="bg-linear-to-r from-red-50/70 to-rose-50/50 dark:from-red-950/30 dark:to-slate-900 border border-red-200 dark:border-red-900/60 rounded-xl p-4 space-y-3">
+              <div className="flex items-center justify-between gap-2 flex-wrap">
+                <div className="flex items-center gap-2">
+                  <div className="w-5 h-5 rounded-md bg-red-600 text-white flex items-center justify-center font-bold text-[10px]">
+                    <Heart className="w-3 h-3 fill-white" />
+                  </div>
+                  <h4 className="text-xs font-bold text-slate-900 dark:text-white uppercase tracking-wider">
+                    Patient Clinical Profile (Transmitted on SOS)
+                  </h4>
+                </div>
+                <span className="text-[10px] font-bold px-2 py-0.5 rounded-full bg-emerald-100 dark:bg-emerald-950 text-emerald-700 dark:text-emerald-300 border border-emerald-300 dark:border-emerald-800">
+                  Transmitted to Crew
+                </span>
+              </div>
+
+              <div className="grid grid-cols-1 sm:grid-cols-3 gap-3 text-xs">
+                <div className="p-2.5 bg-white dark:bg-slate-800 rounded-lg border border-red-100 dark:border-slate-700">
+                  <span className="text-[10px] font-bold uppercase text-slate-400 block">Blood Type</span>
+                  <span className="text-sm font-black text-red-600 dark:text-red-400">
+                    {activeMission.patient_blood_type || 'B+'}
+                  </span>
+                </div>
+
+                <div className="p-2.5 bg-white dark:bg-slate-800 rounded-lg border border-red-100 dark:border-slate-700">
+                  <span className="text-[10px] font-bold uppercase text-amber-600 dark:text-amber-400 block flex items-center gap-1">
+                    <AlertTriangle className="w-2.5 h-2.5" /> Known Allergies
+                  </span>
+                  <span className="text-xs font-bold text-slate-800 dark:text-slate-200 truncate block" title={activeMission.patient_allergies || 'None reported'}>
+                    {activeMission.patient_allergies || 'None reported'}
+                  </span>
+                </div>
+
+                <div className="p-2.5 bg-white dark:bg-slate-800 rounded-lg border border-red-100 dark:border-slate-700">
+                  <span className="text-[10px] font-bold uppercase text-blue-600 dark:text-blue-400 block flex items-center gap-1">
+                    <Users className="w-2.5 h-2.5" /> Emergency Contact (Next of Kin)
+                  </span>
+                  <span className="text-xs font-bold text-slate-800 dark:text-slate-200 truncate block">
+                    {activeMission.patient_emergency_contact_name || 'Rajesh Rao'} ({activeMission.patient_emergency_contact_relation || 'Spouse'})
+                  </span>
+                  {(activeMission.patient_emergency_contact_phone || '+91 98451 98765') && (
+                    <a
+                      href={`tel:${activeMission.patient_emergency_contact_phone || '+91 98451 98765'}`}
+                      className="text-[10px] font-mono text-blue-600 dark:text-blue-400 hover:underline flex items-center gap-1 mt-0.5 font-semibold"
+                    >
+                      <PhoneCall className="w-2.5 h-2.5" />
+                      <span>{activeMission.patient_emergency_contact_phone || '+91 98451 98765'}</span>
+                    </a>
+                  )}
+                </div>
+              </div>
+
+              {activeMission.patient_medical_notes && (
+                <div className="p-2 bg-white dark:bg-slate-800 rounded-lg border border-red-100 dark:border-slate-700 text-[11px] text-slate-600 dark:text-slate-300">
+                  <span className="font-bold text-slate-700 dark:text-slate-200">Clinical History / Notes: </span>
+                  {activeMission.patient_medical_notes}
+                </div>
+              )}
+            </div>
+
             {/* AI Real-time Route Optimizer & Traffic Corridor Map */}
             {(() => {
               const routesToDisplay =
@@ -672,53 +811,105 @@ export const DriverDashboard: React.FC = () => {
                 (activeMission.navigation_stage as 'TO_PATIENT' | 'TO_HOSPITAL') ||
                 (activeMission.status === 'REACHED' ? 'TO_HOSPITAL' : 'TO_PATIENT');
 
+              const destinationName =
+                activeStage === 'TO_HOSPITAL' && activeMission.hospital_destination
+                  ? activeMission.hospital_destination
+                  : activeMission.location;
+
+              const selectedRoute =
+                routesToDisplay.find((r) => r.id === (activeMission.selected_route_id || routesToDisplay[0]?.id)) ||
+                routesToDisplay[0] ||
+                null;
+
               return (
-                <RouteMapVisualizer
-                  originName={
-                    driverCoords && driverCoords.latitude
-                      ? `GPS [${driverCoords.latitude.toFixed(4)}, ${driverCoords.longitude.toFixed(4)}]`
-                      : selectedAmbulance?.base_location || 'Ambulance Station'
-                  }
-                  destinationName={
-                    activeStage === 'TO_HOSPITAL' && activeMission.hospital_destination
-                      ? activeMission.hospital_destination
-                      : activeMission.location
-                  }
-                  routes={routesToDisplay}
-                  selectedRouteId={activeMission.selected_route_id || routesToDisplay[0]?.id}
-                  onSelectRoute={(routeId) => handleSelectRoute(activeMission.id, routeId)}
-                  onRecalculate={() => handleRecalculateRoute(activeMission.id)}
-                  onStartNavigation={() => {
-                    if (activeMission.status === 'DRIVER_ACCEPTED') {
-                      handleUpdateStatus(activeMission.id, 'ON_THE_WAY');
-                    } else {
-                      showToast('Live GPS Navigation active along AI-optimized route', 'info');
-                    }
-                  }}
-                  isRecalculating={isRecalculatingRoute}
-                  stage={activeStage}
-                  onSwitchStage={(newStage) => handleSwitchStage(activeMission.id, newStage)}
-                  hospitals={activeMission.hospital_options || []}
-                  selectedHospital={activeMission.hospital_destination}
-                  onSelectHospital={(hospName) => handleSelectHospital(activeMission.id, hospName)}
-                  onFindNearbyHospitals={() => handleFindNearbyHospitals(activeMission.id)}
-                  onNavigateToHospital={(hosp) => handleNavigateToHospital(activeMission.id, hosp)}
-                  isSearchingHospitals={isSearchingHospitals}
-                  hospitalSearchSource={hospitalSearchSource}
-                  hospitalSearchMessage={hospitalSearchMessage}
-                  showSimulationControls={true}
-                  driverCoords={driverCoords}
-                  patientCoords={
-                    activeMission.patient_latitude && activeMission.patient_longitude
-                      ? { latitude: activeMission.patient_latitude, longitude: activeMission.patient_longitude }
-                      : null
-                  }
-                  isLiveTracking={isTrackingGPS}
-                  gpsPermissionStatus={gpsPermissionStatus}
-                  onEnableLiveLocation={handleEnableLiveLocation}
-                  onUseDemoLocation={handleUseDemoLocation}
-                  lastGpsTimestamp={lastGpsTimestamp}
-                />
+                <div className="space-y-6">
+                  {/* Voice-Assisted Turn-by-Turn Navigation HUD (Active after Driver Acceptance) */}
+                  <div id="driver-voice-navigation-hud">
+                    <VoiceNavigationHUD
+                      route={selectedRoute}
+                      stage={activeStage}
+                      destinationName={destinationName}
+                      isMissionAccepted={['DRIVER_ACCEPTED', 'ON_THE_WAY', 'REACHED'].includes(activeMission.status)}
+                      driverCoords={driverCoords}
+                      onRouteRecalculateNeeded={() => handleRecalculateRoute(activeMission.id)}
+                      onStartNavigation={() => {
+                        if (activeMission.status === 'DRIVER_ACCEPTED') {
+                          handleUpdateStatus(activeMission.id, 'ON_THE_WAY');
+                        } else {
+                          showToast('Voice navigation guidance is active', 'info');
+                        }
+                      }}
+                      onMarkReached={() => handleUpdateStatus(activeMission.id, 'REACHED')}
+                      onUpdateStatus={(nextStatus) => handleUpdateStatus(activeMission.id, nextStatus)}
+                      onShowRoute={() => {
+                        const el = document.getElementById('driver-route-visualizer-section');
+                        if (el) el.scrollIntoView({ behavior: 'smooth' });
+                      }}
+                      missionStatus={activeMission.status}
+                      showToast={showToast}
+                    />
+                  </div>
+
+                  {/* ESP32 Traffic Signal Priority Controller HUD */}
+                  <div id="driver-traffic-signal-hud">
+                    <TrafficSignalHUD
+                      emergencyId={activeMission.id}
+                      ambulanceId={activeMission.ambulance_id || selectedAmbulance?.id}
+                      activeRouteName={selectedRoute?.name}
+                    />
+                  </div>
+
+                  <div id="driver-route-visualizer-section">
+                    <RouteMapVisualizer
+                      originName={
+                        driverCoords && driverCoords.latitude
+                          ? `GPS [${driverCoords.latitude.toFixed(4)}, ${driverCoords.longitude.toFixed(4)}]`
+                          : selectedAmbulance?.base_location || 'Ambulance Station'
+                      }
+                      destinationName={
+                        activeStage === 'TO_HOSPITAL' && activeMission.hospital_destination
+                          ? activeMission.hospital_destination
+                          : activeMission.location
+                      }
+                      routes={routesToDisplay}
+                      selectedRouteId={activeMission.selected_route_id || routesToDisplay[0]?.id}
+                      onSelectRoute={(routeId) => handleSelectRoute(activeMission.id, routeId)}
+                      onRecalculate={() => handleRecalculateRoute(activeMission.id)}
+                      onStartNavigation={() => {
+                        if (activeMission.status === 'DRIVER_ACCEPTED') {
+                          handleUpdateStatus(activeMission.id, 'ON_THE_WAY');
+                        } else {
+                          showToast('Live GPS Navigation active along AI-optimized route', 'info');
+                        }
+                      }}
+                      isRecalculating={isRecalculatingRoute}
+                      stage={activeStage}
+                      onSwitchStage={(newStage) => handleSwitchStage(activeMission.id, newStage)}
+                      hospitals={activeMission.hospital_options || []}
+                      selectedHospital={activeMission.hospital_destination}
+                      onSelectHospital={(hospName) => handleSelectHospital(activeMission.id, hospName)}
+                      onFindNearbyHospitals={() => handleFindNearbyHospitals(activeMission.id)}
+                      onNavigateToHospital={(hosp) => handleNavigateToHospital(activeMission.id, hosp)}
+                      isSearchingHospitals={isSearchingHospitals}
+                      hospitalSearchSource={hospitalSearchSource}
+                      hospitalSearchMessage={hospitalSearchMessage}
+                      showSimulationControls={true}
+                      driverCoords={driverCoords}
+                      patientCoords={
+                        activeMission.latitude && activeMission.longitude
+                          ? { latitude: activeMission.latitude, longitude: activeMission.longitude }
+                          : activeMission.patient_latitude && activeMission.patient_longitude
+                          ? { latitude: activeMission.patient_latitude, longitude: activeMission.patient_longitude }
+                          : null
+                      }
+                      isLiveTracking={isTrackingGPS}
+                      gpsPermissionStatus={gpsPermissionStatus}
+                      onEnableLiveLocation={handleEnableLiveLocation}
+                      onSetManualLocation={handleSetManualLocation}
+                      lastGpsTimestamp={lastGpsTimestamp}
+                    />
+                  </div>
+                </div>
               );
             })()}
 
@@ -790,44 +981,99 @@ export const DriverDashboard: React.FC = () => {
                   <span className="text-[10px] font-normal">{t.driverReadyStandby}</span>
                 </button>
               </div>
+
+              {/* In-Transit e-PCR Tele-Triage & Vitals Telemetry */}
+              {['DRIVER_ACCEPTED', 'ON_THE_WAY', 'REACHED'].includes(activeMission.status) && (
+                <div className="pt-3 border-t border-amber-200/80 dark:border-amber-800/60 flex flex-col sm:flex-row items-start sm:items-center justify-between gap-3">
+                  <div className="flex items-center gap-3">
+                    <div className="p-2.5 bg-red-600 text-white rounded-xl shadow-xs shrink-0">
+                      <Activity className="w-5 h-5 animate-pulse" />
+                    </div>
+                    <div>
+                      <div className="flex items-center gap-2">
+                        <h5 className="text-xs font-bold uppercase tracking-wider text-slate-900 dark:text-white">
+                          e-PCR In-Transit Tele-Triage
+                        </h5>
+                        {activeMission.triage_acuity && (
+                          <span className={`px-2 py-0.5 text-[10px] font-extrabold rounded-md uppercase ${
+                            activeMission.triage_acuity === 'CODE_RED'
+                              ? 'bg-red-600 text-white animate-pulse'
+                              : activeMission.triage_acuity === 'CODE_YELLOW'
+                              ? 'bg-amber-500 text-white'
+                              : 'bg-emerald-600 text-white'
+                          }`}>
+                            {activeMission.triage_acuity.replace('_', ' ')}
+                          </span>
+                        )}
+                      </div>
+                      <p className="text-xs text-slate-600 dark:text-slate-400 mt-0.5">
+                        {activeMission.vitals_heart_rate 
+                          ? `Transmitted: HR ${activeMission.vitals_heart_rate} bpm • BP ${activeMission.vitals_blood_pressure || '120/80'} • SpO2 ${activeMission.vitals_spo2 || 98}% • ER alerted`
+                          : 'Live clinical vitals stream & ER trauma bay pre-arrival notification'}
+                      </p>
+                    </div>
+                  </div>
+
+                  <button
+                    type="button"
+                    onClick={() => setIsVitalsModalOpen(true)}
+                    className="w-full sm:w-auto px-4 py-2.5 bg-red-600 hover:bg-red-700 text-white text-xs font-bold rounded-xl shadow-xs transition-all flex items-center justify-center gap-2 shrink-0 cursor-pointer"
+                  >
+                    <Activity className="w-4 h-4" />
+                    <span>{activeMission.vitals_heart_rate ? 'Update Patient Vitals' : 'Transmit e-PCR to ER'}</span>
+                  </button>
+                </div>
+              )}
             </div>
           </div>
         </div>
       ) : (
         /* Standby state when no active emergency is assigned */
-        <div className="bg-white dark:bg-slate-900 rounded-2xl p-8 border border-slate-200 dark:border-slate-800 text-center space-y-4 shadow-xs">
-          <div className="w-14 h-14 rounded-full bg-emerald-50 dark:bg-emerald-950/50 text-emerald-600 dark:text-emerald-400 flex items-center justify-center mx-auto border border-emerald-100 dark:border-emerald-900">
-            <Check className="w-7 h-7" />
-          </div>
-          <div className="max-w-md mx-auto space-y-1">
-            <h3 className="text-base font-bold text-slate-900 dark:text-white">{t.driverStandby}</h3>
-            <p className="text-xs text-slate-500 dark:text-slate-400 leading-relaxed">
-              {t.driverStandbyDesc}
-            </p>
-          </div>
+        <div className="space-y-6">
+          {/* Live Standby Cockpit Radar */}
+          <LiveFleetRadar 
+            title="Driver GPS Standby Cockpit & Regional Fleet Radar"
+            subtitle="Monitoring active dispatch zone. Your vehicle GPS beacon is broadcasting to emergency dispatch."
+            heightClass="h-[380px] sm:h-[440px]"
+            showEmergencyCta={false}
+          />
 
-          <div className="flex items-center justify-center gap-3 pt-2">
-            <button
-              onClick={() => handleToggleAmbulanceStatus('AVAILABLE')}
-              className={`px-4 py-2 rounded-lg text-xs font-semibold border transition-colors cursor-pointer ${
-                selectedAmbulance?.status === 'AVAILABLE'
-                  ? 'bg-emerald-600 text-white border-emerald-600 shadow-xs'
-                  : 'bg-slate-50 dark:bg-slate-800 text-slate-700 dark:text-slate-300 border-slate-200 dark:border-slate-700 hover:bg-slate-100 dark:hover:bg-slate-700'
-              }`}
-            >
-              Set {t.statusAvailable}
-            </button>
+          <div className="bg-white dark:bg-slate-900 rounded-2xl p-6 sm:p-8 border border-slate-200 dark:border-slate-800 text-center space-y-4 shadow-xs">
+            <div className="w-14 h-14 rounded-full bg-emerald-50 dark:bg-emerald-950/50 text-emerald-600 dark:text-emerald-400 flex items-center justify-center mx-auto border border-emerald-100 dark:border-emerald-900">
+              <Check className="w-7 h-7" />
+            </div>
+            <div className="max-w-md mx-auto space-y-1">
+              <h3 className="text-base font-bold text-slate-900 dark:text-white">{t.driverStandby}</h3>
+              <p className="text-xs text-slate-500 dark:text-slate-400 leading-relaxed">
+                {t.driverStandbyDesc}
+              </p>
+            </div>
 
-            <button
-              onClick={() => handleToggleAmbulanceStatus('MAINTENANCE')}
-              className={`px-4 py-2 rounded-lg text-xs font-semibold border transition-colors cursor-pointer ${
-                selectedAmbulance?.status === 'MAINTENANCE'
-                  ? 'bg-amber-600 text-white border-amber-600 shadow-xs'
-                  : 'bg-slate-50 dark:bg-slate-800 text-slate-700 dark:text-slate-300 border-slate-200 dark:border-slate-700 hover:bg-slate-100 dark:hover:bg-slate-700'
-              }`}
-            >
-              Set Maintenance
-            </button>
+            <div className="flex items-center justify-center gap-3 pt-2">
+              <button
+                type="button"
+                onClick={() => handleToggleAmbulanceStatus('AVAILABLE')}
+                className={`px-4 py-2 rounded-lg text-xs font-semibold border transition-colors cursor-pointer ${
+                  selectedAmbulance?.status === 'AVAILABLE'
+                    ? 'bg-emerald-600 text-white border-emerald-600 shadow-xs'
+                    : 'bg-slate-50 dark:bg-slate-800 text-slate-700 dark:text-slate-300 border-slate-200 dark:border-slate-700 hover:bg-slate-100 dark:hover:bg-slate-700'
+                }`}
+              >
+                Set {t.statusAvailable}
+              </button>
+
+              <button
+                type="button"
+                onClick={() => handleToggleAmbulanceStatus('MAINTENANCE')}
+                className={`px-4 py-2 rounded-lg text-xs font-semibold border transition-colors cursor-pointer ${
+                  selectedAmbulance?.status === 'MAINTENANCE'
+                    ? 'bg-amber-600 text-white border-amber-600 shadow-xs'
+                    : 'bg-slate-50 dark:bg-slate-800 text-slate-700 dark:text-slate-300 border-slate-200 dark:border-slate-700 hover:bg-slate-100 dark:hover:bg-slate-700'
+                }`}
+              >
+                Set Maintenance
+              </button>
+            </div>
           </div>
         </div>
       )}
@@ -887,7 +1133,7 @@ export const DriverDashboard: React.FC = () => {
             {allEmergencies
               .filter((e) => e.ambulance_id === selectedAmbulance?.id)
               .map((item) => (
-                <div key={item.id} className="pt-2.5 text-xs flex items-center justify-between">
+                <div key={item.id} className="pt-2.5 text-xs flex items-center justify-between gap-2">
                   <div>
                     <div className="flex items-center gap-2">
                       <span className="font-bold text-slate-900 dark:text-white">#{item.id} - {item.emergency_type}</span>
@@ -899,9 +1145,22 @@ export const DriverDashboard: React.FC = () => {
                     </div>
                     <p className="text-slate-500 dark:text-slate-400 text-[11px] mt-0.5">{item.location} • {t.patientName}: {item.patient_name}</p>
                   </div>
-                  <span className="text-[10px] text-slate-400 font-mono shrink-0">
-                    {new Date(item.created_at).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}
-                  </span>
+                  <div className="flex items-center gap-2 shrink-0">
+                    <span className="text-[10px] text-slate-400 font-mono">
+                      {new Date(item.created_at).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}
+                    </span>
+                    {item.status === 'COMPLETED' && (
+                      <button
+                        type="button"
+                        onClick={() => openReportModal(item.id, item)}
+                        className="px-2 py-1 bg-blue-50 dark:bg-blue-950/60 hover:bg-blue-100 dark:hover:bg-blue-900/60 text-blue-700 dark:text-blue-300 border border-blue-200 dark:border-blue-800 text-[10px] font-bold rounded-md flex items-center gap-1 transition cursor-pointer"
+                        title="View Patient Emergency Report"
+                      >
+                        <FileText className="w-3 h-3" />
+                        <span>Report</span>
+                      </button>
+                    )}
+                  </div>
                 </div>
               ))}
             {allEmergencies.filter((e) => e.ambulance_id === selectedAmbulance?.id).length === 0 && (
@@ -910,6 +1169,42 @@ export const DriverDashboard: React.FC = () => {
           </div>
         </div>
       </div>
+
+      {/* Emergency Report Modal */}
+      <EmergencyReportModal
+        emergencyId={reportModalEmergencyId || 0}
+        isOpen={reportModalEmergencyId !== null}
+        onClose={() => setReportModalEmergencyId(null)}
+        fallbackEmergency={fallbackReportEmergency}
+      />
+
+      {/* In-Transit Paramedic Vitals & e-PCR Modal */}
+      {activeMission && (
+        <InTransitVitalsModal
+          isOpen={isVitalsModalOpen}
+          onClose={() => setIsVitalsModalOpen(false)}
+          emergencyId={activeMission.id}
+          patientName={activeMission.patient_name}
+          hospitalDestination={activeMission.hospital_destination}
+          currentVitals={{
+            heartRate: activeMission.vitals_heart_rate,
+            bloodPressure: activeMission.vitals_blood_pressure,
+            spo2: activeMission.vitals_spo2,
+            respiratoryRate: activeMission.vitals_respiratory_rate,
+            gcs: activeMission.vitals_gcs,
+            triageAcuity: activeMission.triage_acuity,
+            clinicalNotes: activeMission.vitals_notes,
+          }}
+          onVitalsUpdated={(updatedEmergency) => {
+            setAssignedEmergencies((prev) =>
+              prev.map((e) => (e.id === updatedEmergency.id ? updatedEmergency : e))
+            );
+            setAllEmergencies((prev) =>
+              prev.map((e) => (e.id === updatedEmergency.id ? updatedEmergency : e))
+            );
+          }}
+        />
+      )}
     </div>
   );
 };

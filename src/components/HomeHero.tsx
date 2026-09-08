@@ -3,6 +3,7 @@ import { useAuth } from '../context/AuthContext';
 import { useLanguage } from '../context/LanguageContext';
 import { api } from '../services/api';
 import { SystemStats } from '../types';
+import { LiveFleetRadar } from './LiveFleetRadar';
 import { 
   AlertOctagon, 
   Truck, 
@@ -125,6 +126,15 @@ export const HomeHero: React.FC<HomeHeroProps> = ({ onOpenAuth }) => {
             </div>
           </div>
         </div>
+      </section>
+
+      {/* Real-time GPS Location & Available Standby Fleet Radar */}
+      <section className="space-y-2">
+        <LiveFleetRadar 
+          title="Live Emergency Fleet & GPS Radar"
+          subtitle="Real-time map showing your current position and nearby standby emergency ambulances"
+          onTriggerSos={() => handleLaunchRole('patient')}
+        />
       </section>
 
       {/* Interactive Role Portals */}

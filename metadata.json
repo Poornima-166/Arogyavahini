@@ -1,6 +1,6 @@
 {
   "name": "Arogyavahini",
-  "description": "Smart Integrated Emergency Medical Response System connecting patients, ambulance drivers, and administrators for rapid SOS dispatch and real-time status tracking.",
-  "requestFramePermissions": ["geolocation"],
+  "description": "Smart Emergency Ambulance Management and Traffic Signal Priority System with automated green corridors, hospital ward capacity tracking, and multi-role dashboards.",
+  "requestFramePermissions": ["geolocation", "microphone"],
   "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
 }

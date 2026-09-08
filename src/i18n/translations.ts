@@ -279,6 +279,26 @@ export interface TranslationDictionary {
   notificationNew: string;
   notificationTimeJustNow: string;
   notificationViewEmergency: string;
+
+  // Voice to Text & Symptom Recording
+  voiceSymptomsBtn: string;
+  voiceRecordingTitle: string;
+  voiceRecordingSubtitle: string;
+  voiceStartRecording: string;
+  voiceStopRecording: string;
+  voiceListening: string;
+  voiceSpeakNow: string;
+  voiceTranscribedLabel: string;
+  voiceQuickSymptoms: string;
+  voiceApplySymptoms: string;
+  voiceClear: string;
+  voiceSummarizeAi: string;
+  voiceMicPermissionError: string;
+  voiceNotSupported: string;
+  voiceUrgencyLevel: string;
+  voiceRecommendedType: string;
+  voiceContextAttached: string;
+  voiceUpdateDispatcher: string;
 }
 
 export const translations: Record<Language, TranslationDictionary> = {
@@ -545,6 +565,26 @@ export const translations: Record<Language, TranslationDictionary> = {
     notificationNew: 'NEW',
     notificationTimeJustNow: 'Just now',
     notificationViewEmergency: 'View Emergency Details',
+
+    // Voice to Text & Symptom Recording
+    voiceSymptomsBtn: 'Describe Symptoms with Voice',
+    voiceRecordingTitle: 'Emergency Voice-to-Text Symptom Recorder',
+    voiceRecordingSubtitle: 'Speak naturally to record your symptoms. Dispatchers and paramedics will receive clear clinical context.',
+    voiceStartRecording: 'Start Voice Recording',
+    voiceStopRecording: 'Stop Recording',
+    voiceListening: 'Listening... Speak your symptoms clearly',
+    voiceSpeakNow: 'Speak now into your microphone',
+    voiceTranscribedLabel: 'Transcribed Symptoms (Spoken Context):',
+    voiceQuickSymptoms: 'Tap Quick Emergency Symptoms:',
+    voiceApplySymptoms: 'Save & Use for Emergency SOS',
+    voiceClear: 'Clear Text',
+    voiceSummarizeAi: 'Enhance Clinical Context (AI Triage)',
+    voiceMicPermissionError: 'Microphone access was blocked. Please allow microphone permissions in your browser.',
+    voiceNotSupported: 'Speech recognition is not fully supported in this browser. You can type or tap quick symptom chips below.',
+    voiceUrgencyLevel: 'Estimated Urgency:',
+    voiceRecommendedType: 'Suggested Emergency Unit:',
+    voiceContextAttached: 'Voice-to-Text Context Attached',
+    voiceUpdateDispatcher: 'Update Dispatcher with Voice',
   },
 
   kn: {
@@ -810,6 +850,26 @@ export const translations: Record<Language, TranslationDictionary> = {
     notificationNew: 'ಹೊಸದು',
     notificationTimeJustNow: 'ಈಗಷ್ಟೇ',
     notificationViewEmergency: 'ತುರ್ತು ವಿವರಗಳನ್ನು ವೀಕ್ಷಿಸಿ',
+
+    // Voice to Text & Symptom Recording
+    voiceSymptomsBtn: 'ಧ್ವನಿಯ ಮೂಲಕ ರೋಗಲಕ್ಷಣಗಳನ್ನು ವಿವರಿಸಿ',
+    voiceRecordingTitle: 'ತುರ್ತು ಧ್ವನಿಯಿಂದ ಪಠ್ಯ ರೋಗಲಕ್ಷಣ ರೆಕಾರ್ಡರ್',
+    voiceRecordingSubtitle: 'ನಿಮ್ಮ ರೋಗಲಕ್ಷಣಗಳನ್ನು ಧ್ವನಿಯಲ್ಲಿ ರೆಕಾರ್ಡ್ ಮಾಡಿ. ರವಾನೆದಾರರಿಗೆ ಸ್ಪಷ್ಟ ವೈದ್ಯಕೀಯ ಮಾಹಿತಿ ತಲುಪುತ್ತದೆ.',
+    voiceStartRecording: 'ಧ್ವನಿ ರೆಕಾರ್ಡಿಂಗ್ ಪ್ರಾರಂಭಿಸಿ',
+    voiceStopRecording: 'ರೆಕಾರ್ಡಿಂಗ್ ನಿಲ್ಲಿಸಿ',
+    voiceListening: 'ಕೇಳಿಸಿಕೊಳ್ಳುತ್ತಿದ್ದೇವೆ... ಸ್ಪಷ್ಟವಾಗಿ ಮಾತನಾಡಿ',
+    voiceSpeakNow: 'ಈಗ ಮೈಕ್ರೊಫೋನ್‌ನಲ್ಲಿ ಮಾತನಾಡಿ',
+    voiceTranscribedLabel: 'ಧ್ವನಿ ಲಿಪ್ಯಂತರ ರೋಗಲಕ್ಷಣಗಳು:',
+    voiceQuickSymptoms: 'ತ್ವರಿತ ತುರ್ತು ರೋಗಲಕ್ಷಣಗಳು:',
+    voiceApplySymptoms: 'ತುರ್ತು SOS ಗಾಗಿ ಬಳಸಿ',
+    voiceClear: 'ತೆರವುಗೊಳಿಸಿ',
+    voiceSummarizeAi: 'ವೈದ್ಯಕೀಯ ಸಾರಾಂಶ (AI ವಿಶ್ಲೇಷಣೆ)',
+    voiceMicPermissionError: 'ಮೈಕ್ರೊಫೋನ್ ಅನುಮತಿಯನ್ನು ನಿರಾಕರಿಸಲಾಗಿದೆ. ದಯವಿಟ್ಟು ಬ್ರೌಸರ್‌ನಲ್ಲಿ ಅನುಮತಿ ನೀಡಿ.',
+    voiceNotSupported: 'ಈ ಬ್ರೌಸರ್‌ನಲ್ಲಿ ಭಾಷಣ ಗುರುತಿಸುವಿಕೆ ಬೆಂಬಲಿಸುವುದಿಲ್ಲ. ನೀವು ಕೆಳಗಿನ ಟ್ಯಾಗ್‌ಗಳನ್ನು ಬಳಸಬಹುದು.',
+    voiceUrgencyLevel: 'ತುರ್ತು ಮಟ್ಟ:',
+    voiceRecommendedType: 'ಶಿಫಾರಸು ಮಾಡಿದ ಆಂಬ್ಯುಲೆನ್ಸ್:',
+    voiceContextAttached: 'ಧ್ವನಿ ರೋಗಲಕ್ಷಣ ಮಾಹಿತಿ ಲಗತ್ತಿಸಲಾಗಿದೆ',
+    voiceUpdateDispatcher: 'ಧ್ವನಿಯ ಮೂಲಕ ರವಾನೆದಾರರಿಗೆ ಅಪ್‌ಡೇಟ್ ಮಾಡಿ',
   },
 
   hi: {
@@ -1075,5 +1135,25 @@ export const translations: Record<Language, TranslationDictionary> = {
     notificationNew: 'नया',
     notificationTimeJustNow: 'अभी-अभी',
     notificationViewEmergency: 'आपातकालीन विवरण देखें',
+
+    // Voice to Text & Symptom Recording
+    voiceSymptomsBtn: 'आवाज़ से लक्षण बताएं (Voice-to-Text)',
+    voiceRecordingTitle: 'आपातकालीन वॉयस-टू-टेक्स्ट लक्षण रिकॉर्डर',
+    voiceRecordingSubtitle: 'बोलकर अपने लक्षणों का वर्णन करें। प्रेषक और पैरामेडिक्स को स्पष्ट नैदानिक संदर्भ प्राप्त होगा।',
+    voiceStartRecording: 'वॉयस रिकॉर्डिंग शुरू करें',
+    voiceStopRecording: 'रिकॉर्डिंग रोकें',
+    voiceListening: 'सुन रहे हैं... कृपया स्पष्ट बोलें',
+    voiceSpeakNow: 'अब माइक्रोफ़ोन में बोलें',
+    voiceTranscribedLabel: 'ट्रांसक्रिप्ट किए गए लक्षण (बोला गया संदर्भ):',
+    voiceQuickSymptoms: 'त्वरित आपातकालीन लक्षण चुनें:',
+    voiceApplySymptoms: 'सहेजें और आपातकालीन SOS में जोड़ें',
+    voiceClear: 'टेक्स्ट साफ़ करें',
+    voiceSummarizeAi: 'नैदानिक संदर्भ बढ़ाएं (AI ट्राइएज)',
+    voiceMicPermissionError: 'माइक्रोफ़ोन अनुमति अवरुद्ध है। कृपया ब्राउज़र सेटिंग में अनुमति दें।',
+    voiceNotSupported: 'इस ब्राउज़र में स्पीच रिकग्निशन पूरी तरह समर्थित नहीं है। आप नीचे दिए गए लक्षणों को टैप कर सकते हैं।',
+    voiceUrgencyLevel: 'अनुमानित तात्कालिकता:',
+    voiceRecommendedType: 'अनुशंसित आपातकालीन इकाई:',
+    voiceContextAttached: 'वॉयस-टू-टेक्स्ट संदर्भ संलग्न',
+    voiceUpdateDispatcher: 'आवाज़ से प्रेषक को अपडेट करें',
   },
 };

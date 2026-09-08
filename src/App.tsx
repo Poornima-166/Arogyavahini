@@ -3,6 +3,7 @@ import { AuthProvider, useAuth } from './context/AuthContext';
 import { LanguageProvider, useLanguage } from './context/LanguageContext';
 import { ThemeProvider } from './context/ThemeContext';
 import { NotificationProvider } from './context/NotificationContext';
+import { LocationProvider } from './context/LocationContext';
 import { Navbar } from './components/Navbar';
 import { HomeHero } from './components/HomeHero';
 import { PatientDashboard } from './components/PatientDashboard';
@@ -124,7 +125,9 @@ export default function App() {
       <LanguageProvider>
         <AuthProvider>
           <NotificationProvider>
-            <AppContent />
+            <LocationProvider>
+              <AppContent />
+            </LocationProvider>
           </NotificationProvider>
         </AuthProvider>
       </LanguageProvider>

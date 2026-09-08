@@ -10,40 +10,47 @@ function getHashNumber(str: string): number {
   return Math.abs(hash);
 }
 
-const LOCATION_COORDS: Record<string, [number, number]> = {
-  'Central Trauma Center, Block A': [12.9647, 77.5753],
-  'Indiranagar Emergency Hub': [12.9784, 77.6408],
-  'Jayanagar 4th Block Rescue Station': [12.9299, 77.5824],
-  'Whitefield Fast-Response Depot': [12.9698, 77.7499],
-  'Koramangala 5th Block': [12.9352, 77.6245],
-  'Indiranagar 100ft Road': [12.9719, 77.6412],
-  'MG Road Metro Station': [12.9756, 77.6066],
-  'MG Road Metro Station Gate 2, Bengaluru': [12.9756, 77.6066],
-  'Jayanagar 4th Block': [12.9299, 77.5824],
-  'Whitefield Main Road': [12.9698, 77.7499],
-  'Majestic Bus Terminal': [12.9767, 77.5713],
-  'Hebbal Flyover Junction': [13.0358, 77.5970],
-  'Electronic City Phase 1': [12.8452, 77.6602],
-  'Malleshwaram 8th Cross': [12.9988, 77.5695],
-  'Rajajinagar 1st Block': [12.9912, 77.5543],
-  'Banashankari 2nd Stage': [12.9255, 77.5468],
-  'BTM Layout 2nd Stage': [12.9166, 77.6101],
-  'HSR Layout Sector 2': [12.9121, 77.6446],
-  'Yeshwanthpur Junction': [13.0223, 77.5492],
-  'Ulsoor Lake Road': [12.9818, 77.6200],
-};
+export function isValidCoordinate(lat: any, lng: any): boolean {
+  if (typeof lat !== 'number' || typeof lng !== 'number') return false;
+  if (isNaN(lat) || isNaN(lng)) return false;
+  if (lat < -90 || lat > 90 || lng < -180 || lng > 180) return false;
+  // Null Island guard: (0, 0) is off the coast of Africa and is never a valid user or emergency location
+  if (Math.abs(lat) < 0.1 && Math.abs(lng) < 0.1) return false;
+  return true;
+}
 
-export function getClientCoordsForLocation(loc: string): [number, number] {
-  if (!loc) return [12.9716, 77.5946];
-  for (const [key, coords] of Object.entries(LOCATION_COORDS)) {
-    if (loc.toLowerCase().includes(key.toLowerCase()) || key.toLowerCase().includes(loc.toLowerCase())) {
-      return coords;
-    }
+export function validateAndNormalizeCoords(lat: any, lng: any): [number, number] | null {
+  let nLat = Number(lat);
+  let nLng = Number(lng);
+  if (isNaN(nLat) || isNaN(nLng)) return null;
+
+  // Auto-correct if coordinates were swapped in [lng, lat] order
+  if (Math.abs(nLat) > 90 && Math.abs(nLng) <= 90) {
+    const temp = nLat;
+    nLat = nLng;
+    nLng = temp;
   }
-  const hash = getHashNumber(loc);
-  const latOffset = ((hash % 100) - 50) / 1500;
-  const lngOffset = (((hash >> 3) % 100) - 50) / 1500;
-  return [12.9716 + latOffset, 77.5946 + lngOffset];
+
+  if (!isValidCoordinate(nLat, nLng)) return null;
+  return [parseFloat(nLat.toFixed(5)), parseFloat(nLng.toFixed(5))];
+}
+
+export function getClientCoordsForLocation(loc: string, fallbackCoords?: [number, number]): [number, number] | null {
+  if (fallbackCoords && isValidCoordinate(fallbackCoords[0], fallbackCoords[1])) {
+    return [fallbackCoords[0], fallbackCoords[1]];
+  }
+  if (!loc) return null;
+
+  // Try extracting actual coordinates from text: e.g. "Lat: 13.0827, Long: 80.2707" or "13.0827, 80.2707"
+  const match = loc.match(/(-?\d{1,2}\.\d+)[,\s]+(?:Long:?\s*|Lng:?\s*)?(-?\d{1,3}\.\d+)/i);
+  if (match) {
+    const lat = parseFloat(match[1]);
+    const lng = parseFloat(match[2]);
+    const normalized = validateAndNormalizeCoords(lat, lng);
+    if (normalized) return normalized;
+  }
+
+  return null;
 }
 
 export function calculateGeoDistanceKm(p1: [number, number], p2: [number, number]): number {
@@ -71,13 +78,32 @@ export function generateClientFallbackRoutes(
   originCoordsParam?: [number, number] | null,
   destinationCoordsParam?: [number, number] | null
 ): RouteOption[] {
-  const originCoords = originCoordsParam && originCoordsParam[0] && originCoordsParam[1]
-    ? originCoordsParam
+  let origin = originCoordsParam
+    ? validateAndNormalizeCoords(originCoordsParam[0], originCoordsParam[1])
     : getClientCoordsForLocation(originLoc);
-  const destCoords = destinationCoordsParam && destinationCoordsParam[0] && destinationCoordsParam[1]
-    ? destinationCoordsParam
+  let dest = destinationCoordsParam
+    ? validateAndNormalizeCoords(destinationCoordsParam[0], destinationCoordsParam[1])
     : getClientCoordsForLocation(destLoc);
-  const baseDistance = calculateGeoDistanceKm(originCoords, destCoords);
+
+  if (origin && !dest) {
+    dest = [parseFloat((origin[0] + 0.015).toFixed(5)), parseFloat((origin[1] + 0.012).toFixed(5))];
+  } else if (!origin && dest) {
+    origin = [parseFloat((dest[0] - 0.015).toFixed(5)), parseFloat((dest[1] - 0.012).toFixed(5))];
+  }
+
+  // If both coordinates cannot be resolved, return empty to prevent generating invalid (0, 0) coordinates
+  if (!origin || !dest) {
+    return [];
+  }
+
+  // Distance validation: Ensure routes are calculated ONLY between nearby valid coordinates!
+  // If coordinates are in different countries or > 80 km apart:
+  const rawDist = calculateGeoDistanceKm(origin, dest);
+  if (rawDist > 80) {
+    dest = [parseFloat((origin[0] + 0.015).toFixed(5)), parseFloat((origin[1] + 0.012).toFixed(5))];
+  }
+
+  const baseDistance = calculateGeoDistanceKm(origin, dest);
 
   const seed = getHashNumber(originLoc + destLoc + emergencyType) + variationSeed;
 
@@ -115,8 +141,8 @@ export function generateClientFallbackRoutes(
     const steps = 7;
     for (let i = 0; i <= steps; i++) {
       const t = i / steps;
-      const lat = originCoords[0] + (destCoords[0] - originCoords[0]) * t + Math.sin(t * Math.PI) * curveFactor * 0.015;
-      const lng = originCoords[1] + (destCoords[1] - originCoords[1]) * t + Math.sin(t * Math.PI) * curveFactor * -0.015;
+      const lat = origin[0] + (dest[0] - origin[0]) * t + Math.sin(t * Math.PI) * curveFactor * 0.005;
+      const lng = origin[1] + (dest[1] - origin[1]) * t + Math.sin(t * Math.PI) * curveFactor * -0.005;
       points.push([parseFloat(lat.toFixed(5)), parseFloat(lng.toFixed(5))]);
     }
     return points;
