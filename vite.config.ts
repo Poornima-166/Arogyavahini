@@ -1,11 +1,74 @@
 import tailwindcss from '@tailwindcss/vite';
 import react from '@vitejs/plugin-react';
 import path from 'path';
-import {defineConfig} from 'vite';
+import { defineConfig } from 'vite';
+import { VitePWA } from 'vite-plugin-pwa';
 
 export default defineConfig(() => {
   return {
-    plugins: [react(), tailwindcss()],
+    plugins: [
+      react(),
+      tailwindcss(),
+      VitePWA({
+        registerType: 'autoUpdate',
+        includeAssets: ['apple-touch-icon.png', 'icon.svg'],
+        manifest: {
+          id: '/',
+          name: 'Arogyavahini - Smart Emergency Ambulance System',
+          short_name: 'Arogyavahini',
+          description: 'Smart Emergency Ambulance Management & Traffic Signal Priority System with automated green corridors.',
+          theme_color: '#dc2626',
+          background_color: '#0f172a',
+          display: 'standalone',
+          orientation: 'portrait',
+          start_url: '/',
+          scope: '/',
+          icons: [
+            {
+              src: '/pwa-192x192.png',
+              sizes: '192x192',
+              type: 'image/png',
+              purpose: 'any',
+            },
+            {
+              src: '/pwa-512x512.png',
+              sizes: '512x512',
+              type: 'image/png',
+              purpose: 'any',
+            },
+            {
+              src: '/pwa-maskable-512x512.png',
+              sizes: '512x512',
+              type: 'image/png',
+              purpose: 'maskable',
+            },
+          ],
+        },
+        workbox: {
+          globPatterns: ['**/*.{js,css,html,ico,png,svg,woff,woff2}'],
+          runtimeCaching: [
+            {
+              urlPattern: /^https:\/\/unpkg\.com\/leaflet@1\.9\.4\/.*/i,
+              handler: 'CacheFirst',
+              options: {
+                cacheName: 'leaflet-cache',
+                expiration: {
+                  maxEntries: 20,
+                  maxAgeSeconds: 60 * 60 * 24 * 30, // 30 days
+                },
+                cacheableResponse: {
+                  statuses: [0, 200],
+                },
+              },
+            },
+          ],
+        },
+        devOptions: {
+          enabled: true, // Enables service worker in development / AI Studio preview
+          type: 'module',
+        },
+      }),
+    ],
     resolve: {
       alias: {
         '@': path.resolve(__dirname, '.'),

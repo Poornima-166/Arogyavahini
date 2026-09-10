@@ -1,8 +1,268 @@
 @import "tailwindcss";
 
 @custom-variant dark (&:where(.dark, .dark *));
+@custom-variant high-contrast (&:where(.high-contrast, .high-contrast *));
 
 /* Smooth transitions for theme switching */
 html, body {
   transition: background-color 0.2s ease, color 0.2s ease;
 }
+
+/* =========================================================================
+   HIGH-CONTRAST GLARE MODE FOR OUTDOOR EMERGENCY PERSONNEL
+   Forces pitch black backgrounds (#000000) and vibrant yellow (#FFE600)
+   or pure white (#FFFFFF) text to guarantee maximum outdoor visibility.
+   ========================================================================= */
+
+/* 1. Root & Base Canvas */
+html.high-contrast,
+body.high-contrast {
+  background-color: #000000 !important;
+  color: #ffffff !important;
+}
+
+/* 2. Containers, Surfaces, Cards, Sections, Modals & Drawers */
+.high-contrast div[class*="bg-"],
+.high-contrast section[class*="bg-"],
+.high-contrast header[class*="bg-"],
+.high-contrast footer[class*="bg-"],
+.high-contrast nav[class*="bg-"],
+.high-contrast aside[class*="bg-"],
+.high-contrast main[class*="bg-"],
+.high-contrast form[class*="bg-"],
+.high-contrast ul[class*="bg-"],
+.high-contrast li[class*="bg-"],
+.high-contrast table[class*="bg-"],
+.high-contrast tr[class*="bg-"],
+.high-contrast th[class*="bg-"],
+.high-contrast td[class*="bg-"] {
+  background-color: #000000 !important;
+}
+
+/* Ensure backdrop blurs and modal overlays are deep opaque black */
+.high-contrast div[class*="bg-black/"],
+.high-contrast div[class*="bg-slate-900/"],
+.high-contrast div[class*="backdrop-blur"] {
+  background-color: rgba(0, 0, 0, 0.96) !important;
+}
+
+/* 3. Text Color Rules: Vibrant Yellow for Headings/Emphasized Elements, Crisp White for Body */
+.high-contrast h1,
+.high-contrast h2,
+.high-contrast h3,
+.high-contrast h4,
+.high-contrast h5,
+.high-contrast h6,
+.high-contrast strong,
+.high-contrast b,
+.high-contrast [class*="text-amber-"],
+.high-contrast [class*="text-yellow-"],
+.high-contrast [class*="text-orange-"] {
+  color: #ffe600 !important; /* Vibrant Emergency Yellow */
+  text-shadow: 0 0 1px rgba(255, 230, 0, 0.4);
+}
+
+.high-contrast p,
+.high-contrast span,
+.high-contrast label,
+.high-contrast td,
+.high-contrast th,
+.high-contrast a,
+.high-contrast button,
+.high-contrast input,
+.high-contrast textarea,
+.high-contrast select,
+.high-contrast li {
+  color: #ffffff !important;
+}
+
+/* Force faint/muted/gray text to bright white or soft vibrant yellow */
+.high-contrast [class*="text-slate-300"],
+.high-contrast [class*="text-slate-400"],
+.high-contrast [class*="text-slate-500"],
+.high-contrast [class*="text-slate-600"],
+.high-contrast [class*="text-gray-300"],
+.high-contrast [class*="text-gray-400"],
+.high-contrast [class*="text-gray-500"],
+.high-contrast [class*="text-gray-600"],
+.high-contrast [class*="text-muted"] {
+  color: #fef08a !important; /* High-visibility soft yellow */
+}
+
+/* Critical Emergency Alert text stays vivid Red or Amber-Yellow */
+.high-contrast [class*="text-red-400"],
+.high-contrast [class*="text-red-500"],
+.high-contrast [class*="text-red-600"] {
+  color: #ff3333 !important;
+}
+
+.high-contrast [class*="text-emerald-400"],
+.high-contrast [class*="text-emerald-500"],
+.high-contrast [class*="text-emerald-600"],
+.high-contrast [class*="text-green-400"],
+.high-contrast [class*="text-green-500"] {
+  color: #00ff66 !important;
+}
+
+.high-contrast [class*="text-blue-400"],
+.high-contrast [class*="text-blue-500"],
+.high-contrast [class*="text-cyan-400"] {
+  color: #38bdf8 !important;
+}
+
+/* 4. High-Contrast Borders */
+.high-contrast [class*="border"],
+.high-contrast hr {
+  border-color: #ffe600 !important;
+  border-width: 1.5px;
+}
+
+.high-contrast .border-slate-800,
+.high-contrast .border-slate-700,
+.high-contrast .border-slate-600,
+.high-contrast .border-slate-200,
+.high-contrast .border-slate-300 {
+  border-color: #444444 !important;
+}
+
+/* Card panels with high visibility borders */
+.high-contrast [class*="rounded-"][class*="border"] {
+  border-color: #ffe600 !important;
+  box-shadow: 0 0 0 1px #ffe600 inset;
+}
+
+/* 5. Form Elements (Inputs, Selects, Textareas) */
+.high-contrast input,
+.high-contrast textarea,
+.high-contrast select {
+  background-color: #000000 !important;
+  color: #ffffff !important;
+  border: 2px solid #ffe600 !important;
+  font-weight: 600 !important;
+}
+
+.high-contrast input::placeholder,
+.high-contrast textarea::placeholder {
+  color: #fef08a !important;
+  opacity: 0.9 !important;
+}
+
+.high-contrast input:focus,
+.high-contrast textarea:focus,
+.high-contrast select:focus {
+  outline: 3px solid #ffe600 !important;
+  outline-offset: 2px !important;
+  box-shadow: 0 0 12px rgba(255, 230, 0, 0.8) !important;
+}
+
+/* 6. High-Contrast Buttons */
+.high-contrast button {
+  border-color: #ffe600 !important;
+}
+
+/* High-priority action buttons */
+.high-contrast button.bg-red-600,
+.high-contrast button[class*="bg-red-"] {
+  background-color: #dc2626 !important;
+  color: #ffffff !important;
+  border: 2px solid #ffffff !important;
+  font-weight: 800 !important;
+}
+
+.high-contrast button.bg-emerald-600,
+.high-contrast button[class*="bg-emerald-"],
+.high-contrast button[class*="bg-green-"] {
+  background-color: #00aa44 !important;
+  color: #ffffff !important;
+  border: 2px solid #00ff66 !important;
+  font-weight: 800 !important;
+}
+
+.high-contrast button.bg-blue-600,
+.high-contrast button[class*="bg-blue-"],
+.high-contrast button[class*="bg-indigo-"] {
+  background-color: #ffe600 !important;
+  color: #000000 !important;
+  border: 2px solid #ffffff !important;
+  font-weight: 900 !important;
+}
+
+/* Invert icons in buttons if needed for contrast */
+.high-contrast button.bg-blue-600 svg,
+.high-contrast button[class*="bg-blue-"] svg {
+  color: #000000 !important;
+  stroke: #000000 !important;
+}
+
+/* 7. Status Badges, Pills & Indicators */
+.high-contrast [class*="rounded-full"][class*="bg-"] {
+  background-color: #000000 !important;
+  border: 2px solid #ffe600 !important;
+  color: #ffe600 !important;
+  font-weight: 700 !important;
+}
+
+.high-contrast [class*="rounded-full"][class*="bg-red"] {
+  border-color: #ff3333 !important;
+  color: #ff3333 !important;
+}
+
+.high-contrast [class*="rounded-full"][class*="bg-emerald"],
+.high-contrast [class*="rounded-full"][class*="bg-green"] {
+  border-color: #00ff66 !important;
+  color: #00ff66 !important;
+}
+
+/* 8. Table Headers and Rows */
+.high-contrast th {
+  background-color: #111111 !important;
+  color: #ffe600 !important;
+  border-bottom: 2px solid #ffe600 !important;
+}
+
+.high-contrast tr {
+  border-bottom: 1px solid #333333 !important;
+}
+
+.high-contrast tr:hover {
+  background-color: #1a1a1a !important;
+}
+
+/* 9. Leaflet Map Container & Marker Protection */
+.high-contrast .leaflet-container {
+  filter: contrast(130%) brightness(95%);
+}
+
+.high-contrast .leaflet-tile-container,
+.high-contrast .leaflet-tile,
+.high-contrast .leaflet-layer,
+.high-contrast .leaflet-pane,
+.high-contrast .leaflet-map-pane,
+.high-contrast .leaflet-marker-pane,
+.high-contrast .leaflet-overlay-pane {
+  background-color: transparent !important;
+}
+
+.high-contrast .leaflet-popup-content-wrapper,
+.high-contrast .leaflet-popup-tip {
+  background-color: #000000 !important;
+  color: #ffffff !important;
+  border: 2px solid #ffe600 !important;
+}
+
+/* 10. Traffic Signal HUD & High-Glare Visuals */
+.high-contrast .traffic-light-active-green {
+  background-color: #00ff66 !important;
+  box-shadow: 0 0 20px #00ff66 !important;
+}
+
+.high-contrast .traffic-light-active-red {
+  background-color: #ff1a1a !important;
+  box-shadow: 0 0 20px #ff1a1a !important;
+}
+
+.high-contrast .traffic-light-active-yellow {
+  background-color: #ffe600 !important;
+  box-shadow: 0 0 20px #ffe600 !important;
+}
+

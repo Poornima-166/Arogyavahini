@@ -12,6 +12,7 @@ export interface TranslationDictionary {
   soundUnmute: string;
   themeLight: string;
   themeDark: string;
+  highContrastToggle: string;
   languageSelect: string;
   roleLabel: string;
   logout: string;
@@ -313,6 +314,7 @@ export const translations: Record<Language, TranslationDictionary> = {
     soundUnmute: 'Unmute Siren Audio',
     themeLight: 'Switch to Light Mode',
     themeDark: 'Switch to Dark Mode',
+    highContrastToggle: 'High-Contrast Glare Mode (Outdoor Sunlight)',
     languageSelect: 'Select Language',
     roleLabel: 'ROLE:',
     logout: 'Logout',
@@ -598,6 +600,7 @@ export const translations: Record<Language, TranslationDictionary> = {
     soundUnmute: 'ಸೈರನ್ ಶಬ್ದ ಆನ್ ಮಾಡಿ',
     themeLight: 'ಲೈಟ್ ಮೋಡ್‌ಗೆ ಬದಲಿಸಿ',
     themeDark: 'ಡಾರ್ಕ್ ಮೋಡ್‌ಗೆ ಬದಲಿಸಿ',
+    highContrastToggle: 'ಹೈ-ಕಾಂಟ್ರಾಸ್ಟ್ ಗ್ಲೇರ್ ಮೋಡ್ (ಬಿಸಿಲು/ಹೊರಾಂಗಣ)',
     languageSelect: 'ಭಾಷೆಯನ್ನು ಆಯ್ಕೆಮಾಡಿ',
     roleLabel: 'ಪಾತ್ರ:',
     logout: 'ಲಾಗ್ ಔಟ್',
@@ -883,6 +886,7 @@ export const translations: Record<Language, TranslationDictionary> = {
     soundUnmute: 'सायरन अनम्यूट करें',
     themeLight: 'लाइट मोड पर स्विच करें',
     themeDark: 'डार्क मोड पर स्विच करें',
+    highContrastToggle: 'हाई-कंट्रास्ट ग्लेयर मोड (धूप/आउटडोर)',
     languageSelect: 'भाषा चुनें',
     roleLabel: 'भूमिका:',
     logout: 'लॉग आउट',

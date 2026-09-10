@@ -80,9 +80,13 @@ export const HomeHero: React.FC<HomeHeroProps> = ({ onOpenAuth }) => {
             <button
               onClick={() => handleLaunchRole('patient')}
               className="w-full sm:w-auto px-7 py-3.5 bg-red-600 hover:bg-red-500 text-white font-bold rounded-xl shadow-lg shadow-red-600/20 flex items-center justify-center gap-2.5 text-base transition-all transform hover:-translate-y-0.5 active:translate-y-0"
+              title="Trigger Emergency SOS (or press Cmd+Shift+S anywhere)"
             >
               <AlertOctagon className="w-5 h-5 animate-pulse" />
               <span>{t.heroTriggerSOS}</span>
+              <span className="hidden sm:inline-block text-[11px] font-mono font-bold bg-red-800 text-amber-200 px-2 py-0.5 rounded border border-red-400/60 ml-0.5">
+                ⌘+Shift+S
+              </span>
               <ArrowRight className="w-4 h-4" />
             </button>
 

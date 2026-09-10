@@ -19,6 +19,9 @@ import {
   Clock,
   Filter,
   Check,
+  WifiOff,
+  Wifi,
+  AlertTriangle,
 } from 'lucide-react';
 
 interface NotificationBellProps {
@@ -80,6 +83,12 @@ export const NotificationBell: React.FC<NotificationBellProps> = ({ onOpenEmerge
       case 'ADMIN_EMERGENCY_CANCELLED':
       case 'EMERGENCY_CLAIMED_BY_OTHER':
         return <Info className="w-4 h-4 text-slate-400" />;
+      case 'OFFLINE_ALERT':
+        return <WifiOff className="w-4 h-4 text-amber-500" />;
+      case 'ONLINE_RESTORED':
+        return <Wifi className="w-4 h-4 text-emerald-500" />;
+      case 'SYSTEM_ALERT':
+        return <AlertTriangle className="w-4 h-4 text-amber-500" />;
       default:
         return <CheckCircle2 className="w-4 h-4 text-blue-500" />;
     }

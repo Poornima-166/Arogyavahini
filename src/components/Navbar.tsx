@@ -7,6 +7,7 @@ import { Language } from '../i18n/translations';
 import { NotificationBell } from './NotificationBell';
 import { useLocation } from '../context/LocationContext';
 import { LiveLocationModal } from './LiveLocationModal';
+import { PWAInstallButton } from './PWAInstallButton';
 import { 
   Heart,
   Truck, 
@@ -31,7 +32,8 @@ import {
   ChevronDown,
   Check,
   Compass,
-  MapPin
+  MapPin,
+  Contrast
 } from 'lucide-react';
 
 interface NavbarProps {
@@ -41,7 +43,7 @@ interface NavbarProps {
 export const Navbar: React.FC<NavbarProps> = ({ openAuthModal }) => {
   const { user, isAuthenticated, logout } = useAuth();
   const { language, setLanguage, t } = useLanguage();
-  const { theme, toggleTheme, isDark } = useTheme();
+  const { theme, toggleTheme, isDark, isHighContrast, toggleHighContrast } = useTheme();
   const { userCoords, locationSource, cityName, isLocating } = useLocation();
   const [soundOn, setSoundOn] = useState(true);
   const [activeItem, setActiveItem] = useState<string>('dashboard');
@@ -200,6 +202,7 @@ export const Navbar: React.FC<NavbarProps> = ({ openAuthModal }) => {
 
                 <button
                   onClick={() => handleNavClick('sos', 'patient-emergency-sos')}
+                  title="Emergency SOS (or press Cmd+Shift+S anywhere)"
                   className={`px-3 py-1.5 rounded-lg text-xs font-semibold flex items-center gap-1.5 transition-all ${
                     activeItem === 'sos'
                       ? 'bg-red-600 text-white font-bold'
@@ -208,6 +211,9 @@ export const Navbar: React.FC<NavbarProps> = ({ openAuthModal }) => {
                 >
                   <AlertOctagon className="w-3.5 h-3.5" />
                   <span>{t.navEmergencySOS}</span>
+                  <span className="hidden lg:inline-block text-[10px] font-mono font-bold bg-red-950/80 text-amber-200 px-1 py-0.5 rounded border border-red-400/60 ml-0.5">
+                    ⌘⇧S
+                  </span>
                 </button>
 
                 <button
@@ -329,7 +335,19 @@ export const Navbar: React.FC<NavbarProps> = ({ openAuthModal }) => {
 
         {/* Public / Unauthenticated Navigation */}
         {!isAuthenticated && (
-          <div className="hidden sm:flex items-center gap-3 text-xs text-slate-500 dark:text-slate-400">
+          <div className="hidden sm:flex items-center gap-2.5 text-xs text-slate-500 dark:text-slate-400">
+            <button
+              type="button"
+              onClick={() => window.dispatchEvent(new CustomEvent('arogyavahini:open-rapid-sos'))}
+              title="Click or press Cmd+Shift+S anywhere to trigger rapid emergency SOS"
+              className="px-2.5 py-1 rounded-lg bg-red-600 hover:bg-red-500 text-white font-bold flex items-center gap-1.5 transition shadow-xs cursor-pointer"
+            >
+              <AlertOctagon className="w-3.5 h-3.5 animate-pulse" />
+              <span>SOS</span>
+              <span className="text-[10px] font-mono bg-red-950/80 text-amber-200 px-1 py-0.5 rounded border border-red-400/60 font-black">
+                ⌘⇧S
+              </span>
+            </button>
             <span className="flex items-center gap-1 text-slate-600 dark:text-slate-300 font-medium">
               <PhoneCall className="w-3.5 h-3.5 text-red-500 animate-pulse" />
               <span>{t.hotlineLabel}</span>
@@ -341,7 +359,24 @@ export const Navbar: React.FC<NavbarProps> = ({ openAuthModal }) => {
         )}
 
         {/* Right Section: Language, Theme, Sound, User Info & Logout / Login */}
-        <div className="flex items-center gap-2 sm:gap-2.5 shrink-0">
+        <div className="flex items-center gap-1.5 sm:gap-2.5 shrink-0">
+          {/* Universal Mobile SOS Trigger (Fast thumb access on phones) */}
+          <button
+            type="button"
+            id="header-mobile-rapid-sos"
+            onClick={() => {
+              if (typeof navigator !== 'undefined' && 'vibrate' in navigator) {
+                try { navigator.vibrate([150, 50, 150]); } catch (e) {}
+              }
+              window.dispatchEvent(new CustomEvent('arogyavahini:open-rapid-sos'));
+            }}
+            title="Instant Emergency SOS (or shake mobile phone)"
+            className="flex sm:hidden items-center gap-1 px-2.5 py-1.5 rounded-lg bg-red-600 hover:bg-red-500 active:bg-red-700 text-white text-xs font-black shadow-md shadow-red-900/30 border border-red-500 shrink-0 cursor-pointer animate-pulse"
+          >
+            <AlertOctagon className="w-3.5 h-3.5" />
+            <span>SOS</span>
+          </button>
+
           {/* Live GPS Location Pill Button */}
           <button
             type="button"
@@ -407,6 +442,23 @@ export const Navbar: React.FC<NavbarProps> = ({ openAuthModal }) => {
             )}
           </button>
 
+          {/* High-Contrast Glare Mode Toggle (Outdoor Emergency Sunlight) */}
+          <button
+            onClick={toggleHighContrast}
+            id="high-contrast-toggle-btn"
+            title={`${t.highContrastToggle} (Shortcut: Alt+H)`}
+            className={`p-2 rounded-lg border transition-all relative flex items-center justify-center cursor-pointer ${
+              isHighContrast
+                ? 'border-yellow-400 bg-yellow-400/25 text-yellow-300 shadow-[0_0_10px_rgba(255,230,0,0.6)] font-bold'
+                : 'border-slate-200 dark:border-slate-700 bg-slate-50 dark:bg-slate-800 text-slate-600 dark:text-slate-300 hover:bg-slate-100 dark:hover:bg-slate-700'
+            }`}
+          >
+            <Contrast className={`w-4 h-4 ${isHighContrast ? 'text-yellow-400 animate-pulse' : ''}`} />
+            {isHighContrast && (
+              <span className="absolute -top-1 -right-1 w-2.5 h-2.5 rounded-full bg-yellow-400 border border-black animate-ping" />
+            )}
+          </button>
+
           {/* Sound Mute/Unmute */}
           <button
             onClick={toggleSound}
@@ -415,6 +467,9 @@ export const Navbar: React.FC<NavbarProps> = ({ openAuthModal }) => {
           >
             {soundOn ? <Volume2 className="w-4 h-4 text-emerald-600 dark:text-emerald-400" /> : <VolumeX className="w-4 h-4 text-slate-400" />}
           </button>
+
+          {/* PWA In-App Install Prompt */}
+          <PWAInstallButton variant="navbar" />
 
           {/* Real-time Notification Bell for Authenticated Users */}
           {isAuthenticated && user && (

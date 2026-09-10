@@ -8,11 +8,15 @@ interface NotificationContextType {
   notifications: AppNotification[];
   unreadCount: number;
   loading: boolean;
+  isOnline: boolean;
+  setIsOnline: (online: boolean) => void;
   fetchNotifications: () => Promise<void>;
   markAsRead: (id: number) => Promise<void>;
   markAllAsRead: () => Promise<void>;
   deleteNotification: (id: number) => Promise<void>;
   clearAll: () => Promise<void>;
+  addNotification: (notification: Partial<AppNotification> & { title: string; message: string }) => AppNotification;
+  notify: (title: string, message: string, type?: string) => AppNotification;
 }
 
 const NotificationContext = createContext<NotificationContextType | undefined>(undefined);
@@ -23,11 +27,45 @@ export const NotificationProvider: React.FC<{ children: React.ReactNode }> = ({ 
   const [unreadCount, setUnreadCount] = useState<number>(0);
   const [loading, setLoading] = useState<boolean>(false);
   const [lastKnownIds, setLastKnownIds] = useState<Set<number>>(new Set());
+  const [isOnline, setIsOnline] = useState<boolean>(typeof navigator !== 'undefined' ? navigator.onLine : true);
+
+  const addNotification = useCallback((input: Partial<AppNotification> & { title: string; message: string }) => {
+    const newNotification: AppNotification = {
+      id: input.id || Date.now(),
+      user_id: input.user_id ?? user?.id ?? null,
+      role: input.role ?? user?.role ?? null,
+      title: input.title,
+      message: input.message,
+      notification_type: input.notification_type || 'SYSTEM_ALERT',
+      emergency_request_id: input.emergency_request_id ?? null,
+      is_read: input.is_read ?? 0,
+      created_at: input.created_at || new Date().toISOString(),
+    };
+
+    setNotifications((prev) => [newNotification, ...prev]);
+    if (!newNotification.is_read) {
+      setUnreadCount((prev) => prev + 1);
+    }
+    soundEffects.playAlert();
+    return newNotification;
+  }, [user]);
+
+  const notify = useCallback((title: string, message: string, type: string = 'SYSTEM_ALERT') => {
+    return addNotification({
+      title,
+      message,
+      notification_type: type,
+    });
+  }, [addNotification]);
 
   const fetchNotifications = useCallback(async () => {
     if (!isAuthenticated || !user) {
       setNotifications([]);
       setUnreadCount(0);
+      return;
+    }
+
+    if (typeof navigator !== 'undefined' && !navigator.onLine) {
       return;
     }
 
@@ -146,11 +184,15 @@ export const NotificationProvider: React.FC<{ children: React.ReactNode }> = ({ 
         notifications,
         unreadCount,
         loading,
+        isOnline,
+        setIsOnline,
         fetchNotifications,
         markAsRead,
         markAllAsRead,
         deleteNotification,
         clearAll,
+        addNotification,
+        notify,
       }}
     >
       {children}

@@ -1,0 +1,26 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512" width="100%" height="100%">
+  <defs>
+    <linearGradient id="bgGrad" x1="0%" y1="0%" x2="100%" y2="100%">
+      <stop offset="0%" stop-color="#ef4444" />
+      <stop offset="100%" stop-color="#b91c1c" />
+    </linearGradient>
+    <filter id="shadow" x="-10%" y="-10%" width="120%" height="120%">
+      <feDropShadow dx="0" dy="12" stdDeviation="16" flood-color="#7f1d1d" flood-opacity="0.4" />
+    </filter>
+  </defs>
+
+  <!-- Base Rounded Badge -->
+  <rect width="512" height="512" rx="128" fill="url(#bgGrad)" filter="url(#shadow)" />
+
+  <!-- Subtle Inner Border -->
+  <rect x="16" y="16" width="480" height="480" rx="112" fill="none" stroke="#ffffff" stroke-width="4" stroke-opacity="0.2" />
+
+  <!-- White Medical Emergency Cross -->
+  <path d="M 216 112 L 296 112 A 8 8 0 0 1 304 120 L 304 216 L 400 216 A 8 8 0 0 1 408 224 L 408 288 A 8 8 0 0 1 400 296 L 304 296 L 304 392 A 8 8 0 0 1 296 400 L 216 400 A 8 8 0 0 1 208 392 L 208 296 L 112 296 A 8 8 0 0 1 104 288 L 104 224 A 8 8 0 0 1 112 216 L 208 216 L 208 120 A 8 8 0 0 1 216 112 Z" fill="#ffffff" />
+
+  <!-- Heartbeat ECG Pulse Line across center -->
+  <path d="M 120 256 L 190 256 L 215 200 L 245 320 L 275 220 L 295 280 L 315 256 L 392 256" fill="none" stroke="#dc2626" stroke-width="14" stroke-linecap="round" stroke-linejoin="round" />
+
+  <!-- Emergency Beacon Glow Top Dot -->
+  <circle cx="256" cy="76" r="14" fill="#fbbf24" />
+</svg>
