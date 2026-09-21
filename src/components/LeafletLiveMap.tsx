@@ -3,6 +3,7 @@ import L from '../utils/leafletPatch';
 import { RouteOption, HospitalOption } from '../types';
 import { formatMinutes, formatDistance, getTrafficBadgeClass } from '../utils/routeOptimizer';
 import { useLocation } from '../context/LocationContext';
+import { createBaseTileLayer, isValidLatLng, sanitizeCoordinates, BENGALURU_DEFAULT_COORDS } from '../utils/mapConfig';
 
 interface LeafletLiveMapProps {
   routes: RouteOption[];
@@ -51,22 +52,20 @@ export const LeafletLiveMap: React.FC<LeafletLiveMapProps> = ({
         delete (mapContainerRef.current as any)._leaflet_id;
       }
 
-      const initialLat = driverCoords?.latitude || patientCoords?.latitude || userCoords?.latitude || activeRoute?.coordinates?.[0]?.[0] || 12.9716;
-      const initialLng = driverCoords?.longitude || patientCoords?.longitude || userCoords?.longitude || activeRoute?.coordinates?.[0]?.[1] || 77.5946;
+      const rawLat = driverCoords?.latitude || patientCoords?.latitude || userCoords?.latitude || activeRoute?.coordinates?.[0]?.[0];
+      const rawLng = driverCoords?.longitude || patientCoords?.longitude || userCoords?.longitude || activeRoute?.coordinates?.[0]?.[1];
+      const [initialLat, initialLng] = sanitizeCoordinates(rawLat, rawLng, BENGALURU_DEFAULT_COORDS);
       const initialZoom = 14;
 
       const map = L.map(mapContainerRef.current, {
         zoomControl: false,
-        attributionControl: false,
+        attributionControl: true,
       }).setView([initialLat, initialLng], initialZoom);
 
       L.control.zoom({ position: 'topright' }).addTo(map);
 
-      // CartoDB Voyager / OpenStreetMap standard tiles for high visibility & contrast
-      L.tileLayer('https://{s}.basemaps.cartocdn.com/rastertiles/voyager/{z}/{x}/{y}{r}.png', {
-        maxZoom: 19,
-        subdomains: 'abcd',
-      }).addTo(map);
+      // OpenStreetMap standard tile layer (zero API keys required, zero watermarks)
+      createBaseTileLayer().addTo(map);
 
       polylinesLayerRef.current = L.layerGroup().addTo(map);
       markersLayerRef.current = L.layerGroup().addTo(map);
@@ -98,9 +97,9 @@ export const LeafletLiveMap: React.FC<LeafletLiveMapProps> = ({
     if (!map) return;
     const currentLat = driverCoords?.latitude || patientCoords?.latitude || userCoords?.latitude;
     const currentLng = driverCoords?.longitude || patientCoords?.longitude || userCoords?.longitude;
-    if (currentLat && currentLng && (!routes || routes.length === 0)) {
+    if (isValidLatLng(currentLat, currentLng) && (!routes || routes.length === 0)) {
       try {
-        map.setView([currentLat, currentLng], 15, { animate: false });
+        map.setView([currentLat as number, currentLng as number], 15, { animate: false });
       } catch {
         // safe fallback
       }
@@ -124,7 +123,9 @@ export const LeafletLiveMap: React.FC<LeafletLiveMapProps> = ({
       .filter((r) => r.id !== activeRouteId)
       .forEach((r) => {
         if (!r.coordinates || r.coordinates.length === 0) return;
-        const latlngs: [number, number][] = r.coordinates.map((pt) => [pt[0], pt[1]]);
+        const validCoords = r.coordinates.filter((pt) => isValidLatLng(pt[0], pt[1]));
+        if (validCoords.length === 0) return;
+        const latlngs: [number, number][] = validCoords.map((pt) => [pt[0], pt[1]]);
         const polyline = L.polyline(latlngs, {
           color: '#64748b',
           weight: 4,
@@ -153,59 +154,62 @@ export const LeafletLiveMap: React.FC<LeafletLiveMapProps> = ({
 
     // Draw Active / Selected Route (glow outline + solid colored line)
     if (activeRoute && activeRoute.coordinates && activeRoute.coordinates.length > 0) {
-      const latlngs: [number, number][] = activeRoute.coordinates.map((pt) => [pt[0], pt[1]]);
+      const validCoords = activeRoute.coordinates.filter((pt) => isValidLatLng(pt[0], pt[1]));
+      if (validCoords.length > 0) {
+        const latlngs: [number, number][] = validCoords.map((pt) => [pt[0], pt[1]]);
 
-      // Outer glow polyline
-      const glowPolyline = L.polyline(latlngs, {
-        color: '#10b981',
-        weight: 10,
-        opacity: 0.3,
-        lineCap: 'round',
-        lineJoin: 'round',
-      });
-      polylinesLayer.addLayer(glowPolyline);
+        // Outer glow polyline
+        const glowPolyline = L.polyline(latlngs, {
+          color: '#10b981',
+          weight: 10,
+          opacity: 0.3,
+          lineCap: 'round',
+          lineJoin: 'round',
+        });
+        polylinesLayer.addLayer(glowPolyline);
 
-      // Core route polyline
-      const corePolyline = L.polyline(latlngs, {
-        color: '#059669',
-        weight: 5,
-        opacity: 0.95,
-        lineCap: 'round',
-        lineJoin: 'round',
-      });
+        // Core route polyline
+        const corePolyline = L.polyline(latlngs, {
+          color: '#059669',
+          weight: 5,
+          opacity: 0.95,
+          lineCap: 'round',
+          lineJoin: 'round',
+        });
 
-      corePolyline.bindTooltip(
-        `<div style="font-family: sans-serif; font-size: 12px; padding: 4px;">
-          <strong style="color: #047857;">🤖 ${activeRoute.name} (Active)</strong><br/>
-          <strong>ETA:</strong> ${formatMinutes(activeRoute.estimatedMinutes)} | <strong>Dist:</strong> ${formatDistance(activeRoute.distanceKm)}<br/>
-          <strong>Traffic:</strong> ${activeRoute.traffic} Congestion
-        </div>`,
-        { sticky: true }
-      );
+        corePolyline.bindTooltip(
+          `<div style="font-family: sans-serif; font-size: 12px; padding: 4px;">
+            <strong style="color: #047857;">🤖 ${activeRoute.name} (Active)</strong><br/>
+            <strong>ETA:</strong> ${formatMinutes(activeRoute.estimatedMinutes)} | <strong>Dist:</strong> ${formatDistance(activeRoute.distanceKm)}<br/>
+            <strong>Traffic:</strong> ${activeRoute.traffic} Congestion
+          </div>`,
+          { sticky: true }
+        );
 
-      polylinesLayer.addLayer(corePolyline);
-      latlngs.forEach((pt) => allPoints.push(pt));
+        polylinesLayer.addLayer(corePolyline);
+        latlngs.forEach((pt) => allPoints.push(pt));
+      }
     }
 
     // Determine Ambulance Location (GPS coordinates if live, else route origin)
     let ambLat: number | null = null;
     let ambLng: number | null = null;
 
-    if (driverCoords && driverCoords.latitude && driverCoords.longitude) {
+    if (driverCoords && isValidLatLng(driverCoords.latitude, driverCoords.longitude)) {
       ambLat = driverCoords.latitude;
       ambLng = driverCoords.longitude;
-    } else if (activeRoute && activeRoute.coordinates && activeRoute.coordinates.length > 0) {
+    } else if (activeRoute && activeRoute.coordinates && activeRoute.coordinates.length > 0 && isValidLatLng(activeRoute.coordinates[0][0], activeRoute.coordinates[0][1])) {
       ambLat = activeRoute.coordinates[0][0];
       ambLng = activeRoute.coordinates[0][1];
-    } else if (patientCoords && patientCoords.latitude && patientCoords.longitude) {
+    } else if (patientCoords && isValidLatLng(patientCoords.latitude, patientCoords.longitude)) {
       ambLat = patientCoords.latitude - 0.012;
       ambLng = patientCoords.longitude - 0.010;
-    } else if (userCoords && userCoords.latitude && userCoords.longitude) {
+    } else if (userCoords && isValidLatLng(userCoords.latitude, userCoords.longitude)) {
       ambLat = userCoords.latitude - 0.012;
       ambLng = userCoords.longitude - 0.010;
     }
 
-    if (ambLat !== null && ambLng !== null) {
+    if (ambLat !== null && ambLng !== null && isValidLatLng(ambLat, ambLng)) {
       allPoints.push([ambLat, ambLng]);
 
       // Create Ambulance Marker with Live Beacon & Siren Pulse
@@ -242,22 +246,24 @@ export const LeafletLiveMap: React.FC<LeafletLiveMapProps> = ({
     let destLat: number | null = null;
     let destLng: number | null = null;
 
-    if (patientCoords && patientCoords.latitude && patientCoords.longitude) {
+    if (patientCoords && isValidLatLng(patientCoords.latitude, patientCoords.longitude)) {
       destLat = patientCoords.latitude;
       destLng = patientCoords.longitude;
     } else if (activeRoute && activeRoute.coordinates && activeRoute.coordinates.length > 0) {
       const last = activeRoute.coordinates[activeRoute.coordinates.length - 1];
-      destLat = last[0];
-      destLng = last[1];
-    } else if (driverCoords && driverCoords.latitude && driverCoords.longitude) {
+      if (isValidLatLng(last[0], last[1])) {
+        destLat = last[0];
+        destLng = last[1];
+      }
+    } else if (driverCoords && isValidLatLng(driverCoords.latitude, driverCoords.longitude)) {
       destLat = driverCoords.latitude + 0.015;
       destLng = driverCoords.longitude + 0.012;
-    } else if (userCoords && userCoords.latitude && userCoords.longitude) {
+    } else if (userCoords && isValidLatLng(userCoords.latitude, userCoords.longitude)) {
       destLat = userCoords.latitude;
       destLng = userCoords.longitude;
     }
 
-    if (destLat !== null && destLng !== null) {
+    if (destLat !== null && destLng !== null && isValidLatLng(destLat, destLng)) {
       allPoints.push([destLat, destLng]);
 
       // Create Destination / Patient Marker
@@ -292,7 +298,7 @@ export const LeafletLiveMap: React.FC<LeafletLiveMapProps> = ({
     // Render Hospital Markers with Emergency Ward Capacity Color Coding (Available vs Full)
     if (hospitals.length > 0) {
       hospitals.forEach((h) => {
-        if (!h.coordinates) return;
+        if (!h.coordinates || !isValidLatLng(h.coordinates[0], h.coordinates[1])) return;
         const isChosen = selectedHospital === h.name;
         const isFull = h.ward_capacity === 'FULL' || h.emergencyWardCapacity === 'FULL' || h.availableEmergencyBeds === 0;
         const statusColor = isFull ? '#dc2626' : '#059669';
@@ -386,10 +392,14 @@ export const LeafletLiveMap: React.FC<LeafletLiveMapProps> = ({
     const map = mapInstanceRef.current;
     if (!map) return;
     try {
-      if (driverCoords && driverCoords.latitude && driverCoords.longitude) {
+      if (driverCoords && isValidLatLng(driverCoords.latitude, driverCoords.longitude)) {
         map.setView([driverCoords.latitude, driverCoords.longitude], 15, { animate: false });
-      } else if (activeRoute && activeRoute.coordinates && activeRoute.coordinates.length > 0) {
+      } else if (activeRoute && activeRoute.coordinates && activeRoute.coordinates.length > 0 && isValidLatLng(activeRoute.coordinates[0][0], activeRoute.coordinates[0][1])) {
         map.setView([activeRoute.coordinates[0][0], activeRoute.coordinates[0][1]], 15, { animate: false });
+      } else if (patientCoords && isValidLatLng(patientCoords.latitude, patientCoords.longitude)) {
+        map.setView([patientCoords.latitude, patientCoords.longitude], 15, { animate: false });
+      } else if (userCoords && isValidLatLng(userCoords.latitude, userCoords.longitude)) {
+        map.setView([userCoords.latitude, userCoords.longitude], 15, { animate: false });
       }
     } catch {
       // safe fallback

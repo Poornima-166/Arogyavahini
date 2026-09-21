@@ -341,6 +341,18 @@ export const api = {
     return handleResponse(res);
   },
 
+  async updateAmbulanceLocation(
+    id: number,
+    coords: { latitude: number; longitude: number; accuracy?: number; speed?: number; heading?: number }
+  ): Promise<{ success: boolean; message: string; ambulance_id: number; latitude: number; longitude: number; updated_at: string }> {
+    const res = await fetch(`${API_BASE}/ambulances/${id}/location`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(coords),
+    });
+    return handleResponse(res);
+  },
+
   // Stats
   async getStats(): Promise<SystemStats> {
     const res = await fetch(`${API_BASE}/stats`);

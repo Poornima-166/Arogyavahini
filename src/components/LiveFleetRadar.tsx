@@ -3,6 +3,7 @@ import L from '../utils/leafletPatch';
 import { useLocation } from '../context/LocationContext';
 import { api } from '../services/api';
 import { Ambulance, HospitalOption } from '../types';
+import { createBaseTileLayer, isValidLatLng, sanitizeCoordinates, BENGALURU_DEFAULT_COORDS } from '../utils/mapConfig';
 import { 
   Compass, 
   MapPin, 
@@ -92,20 +93,17 @@ export const LiveFleetRadar: React.FC<LiveFleetRadarProps> = ({
         delete (mapContainerRef.current as any)._leaflet_id;
       }
 
-      const lat = userCoords?.latitude || 12.9716;
-      const lng = userCoords?.longitude || 77.5946;
+      const [lat, lng] = sanitizeCoordinates(userCoords?.latitude, userCoords?.longitude, BENGALURU_DEFAULT_COORDS);
 
       const map = L.map(mapContainerRef.current, {
         zoomControl: false,
-        attributionControl: false,
+        attributionControl: true,
       }).setView([lat, lng], 14);
 
       L.control.zoom({ position: 'topright' }).addTo(map);
 
-      L.tileLayer('https://{s}.basemaps.cartocdn.com/rastertiles/voyager/{z}/{x}/{y}{r}.png', {
-        maxZoom: 19,
-        subdomains: 'abcd',
-      }).addTo(map);
+      // OpenStreetMap standard tile layer (zero API keys required, zero watermarks)
+      createBaseTileLayer().addTo(map);
 
       ambulanceMarkersLayerRef.current = L.layerGroup().addTo(map);
       hospitalMarkersLayerRef.current = L.layerGroup().addTo(map);
@@ -138,6 +136,7 @@ export const LiveFleetRadar: React.FC<LiveFleetRadarProps> = ({
     if (!map || !userCoords) return;
 
     const { latitude, longitude, accuracy } = userCoords;
+    if (!isValidLatLng(latitude, longitude)) return;
 
     // User Beacon Icon
     const userIcon = L.divIcon({
@@ -223,18 +222,20 @@ export const LiveFleetRadar: React.FC<LiveFleetRadarProps> = ({
     hospLayer.clearLayers();
 
     const boundsPoints: L.LatLngExpression[] = [];
-    if (userCoords) {
+    if (userCoords && isValidLatLng(userCoords.latitude, userCoords.longitude)) {
       boundsPoints.push([userCoords.latitude, userCoords.longitude]);
     }
 
     // Render Ambulances
     ambulances.forEach((amb) => {
-      if (typeof amb.current_latitude !== 'number' || typeof amb.current_longitude !== 'number') return;
+      if (!isValidLatLng(amb.current_latitude, amb.current_longitude)) return;
       const lat = amb.current_latitude;
       const lng = amb.current_longitude;
       boundsPoints.push([lat, lng]);
 
-      const dist = userCoords ? calculateDistanceKm(userCoords.latitude, userCoords.longitude, lat, lng) : null;
+      const dist = (userCoords && isValidLatLng(userCoords.latitude, userCoords.longitude)) 
+        ? calculateDistanceKm(userCoords.latitude, userCoords.longitude, lat, lng) 
+        : null;
       const eta = dist ? Math.max(Math.round(dist * 2.2), 3) : null;
 
       const isAvail = amb.status === 'AVAILABLE';
@@ -272,7 +273,7 @@ export const LiveFleetRadar: React.FC<LiveFleetRadarProps> = ({
 
     // Render Hospitals with color-coded markers based on Emergency Ward Capacity
     hospitals.slice(0, 8).forEach((h) => {
-      if (!h.coordinates) return;
+      if (!h.coordinates || !isValidLatLng(h.coordinates[0], h.coordinates[1])) return;
       boundsPoints.push([h.coordinates[0], h.coordinates[1]]);
 
       const isFull = h.ward_capacity === 'FULL' || h.emergencyWardCapacity === 'FULL' || h.availableEmergencyBeds === 0;
@@ -327,7 +328,7 @@ export const LiveFleetRadar: React.FC<LiveFleetRadarProps> = ({
   }, [ambulances, hospitals, userCoords]);
 
   const handleCenterOnMe = () => {
-    if (mapInstanceRef.current && userCoords) {
+    if (mapInstanceRef.current && userCoords && isValidLatLng(userCoords.latitude, userCoords.longitude)) {
       try {
         mapInstanceRef.current.setView([userCoords.latitude, userCoords.longitude], 15, { animate: false });
       } catch {
@@ -338,10 +339,10 @@ export const LiveFleetRadar: React.FC<LiveFleetRadarProps> = ({
 
   // Find closest available ambulance
   const nearestAmbulance = React.useMemo(() => {
-    if (!userCoords || ambulances.length === 0) return null;
+    if (!userCoords || !isValidLatLng(userCoords.latitude, userCoords.longitude) || ambulances.length === 0) return null;
     let closest: { amb: Ambulance; dist: number; eta: number } | null = null;
     ambulances.forEach((amb) => {
-      if (typeof amb.current_latitude === 'number' && typeof amb.current_longitude === 'number') {
+      if (isValidLatLng(amb.current_latitude, amb.current_longitude)) {
         const dist = calculateDistanceKm(userCoords.latitude, userCoords.longitude, amb.current_latitude, amb.current_longitude);
         const eta = Math.max(Math.round(dist * 2.2), 3);
         if (!closest || dist < closest.dist) {

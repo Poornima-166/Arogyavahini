@@ -22,6 +22,7 @@ import {
   broadcastAmbulanceStatus,
   broadcastRouteUpdated,
   broadcastPatientVitalsUpdated,
+  broadcastAmbulanceLocation,
 } from './sockets/socketHandler.js';
 
 export const apiRouter = Router();
@@ -1700,6 +1701,19 @@ apiRouter.post('/emergency/:id/driver-location', async (req: Request, res: Respo
 
     saveDb(db);
 
+    // Broadcast real-time location to Patient, Admin, and Drivers over Socket.IO
+    broadcastAmbulanceLocation({
+      ambulanceId: emergency.ambulance_id || 1,
+      emergencyId: id,
+      driverId: emergency.driver_id || undefined,
+      latitude: Number(latitude),
+      longitude: Number(longitude),
+      accuracy: accuracy ? Number(accuracy) : undefined,
+      speed: req.body.speed !== undefined ? Number(req.body.speed) : undefined,
+      heading: req.body.heading !== undefined ? Number(req.body.heading) : undefined,
+      source: 'device_gps',
+    });
+
     // Evaluate approaching smart traffic junctions for automatic green corridor preemption
     evaluateApproachingPreemption(
       id,
@@ -2890,6 +2904,67 @@ apiRouter.put('/ambulances/:id/status', async (req: Request, res: Response) => {
   } catch (error: any) {
     console.error('Update ambulance status error:', error);
     return res.status(500).json({ error: error.message || 'Failed to update ambulance status' });
+  }
+});
+
+// POST /api/ambulances/:id/location
+// Driver streams periodic GPS location of ambulance
+apiRouter.post('/ambulances/:id/location', async (req: Request, res: Response) => {
+  try {
+    const id = Number(req.params.id);
+    const { latitude, longitude, speed, heading, accuracy } = req.body;
+
+    if (latitude === undefined || longitude === undefined || latitude === null || longitude === null) {
+      return res.status(400).json({ error: 'Latitude and Longitude are required' });
+    }
+
+    const db = await getDb();
+    const now = new Date().toISOString();
+
+    const query = db.exec(`SELECT * FROM ambulances WHERE id = ${id}`);
+    const ambulances = formatQueryResult(query[0]);
+    if (ambulances.length === 0) {
+      return res.status(404).json({ error: 'Ambulance not found' });
+    }
+
+    db.run(
+      `UPDATE ambulances SET
+        current_latitude = ?,
+        current_longitude = ?,
+        last_gps_update = ?
+       WHERE id = ?`,
+      [
+        Number(latitude),
+        Number(longitude),
+        now,
+        id,
+      ]
+    );
+
+    saveDb(db);
+
+    broadcastAmbulanceLocation({
+      ambulanceId: id,
+      driverId: ambulances[0].driver_user_id || undefined,
+      latitude: Number(latitude),
+      longitude: Number(longitude),
+      accuracy: accuracy !== undefined && accuracy !== null ? Number(accuracy) : undefined,
+      speed: speed !== undefined && speed !== null ? Number(speed) : undefined,
+      heading: heading !== undefined && heading !== null ? Number(heading) : undefined,
+      source: 'device_gps',
+    });
+
+    return res.json({
+      success: true,
+      message: 'Ambulance GPS location updated successfully',
+      ambulance_id: id,
+      latitude: Number(latitude),
+      longitude: Number(longitude),
+      updated_at: now,
+    });
+  } catch (error: any) {
+    console.error('Ambulance location update error:', error);
+    return res.status(500).json({ error: error.message || 'Failed to update ambulance location' });
   }
 });
 

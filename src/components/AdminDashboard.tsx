@@ -8,6 +8,7 @@ import { EmergencyReportModal } from './EmergencyReportModal';
 import { HospitalCapacityPieChart } from './HospitalCapacityPieChart';
 import { TrafficSignalHUD } from './TrafficSignalHUD';
 import { HospitalERTriageMonitor } from './HospitalERTriageMonitor';
+import { AdminFleetLiveMap } from './AdminFleetLiveMap';
 import { 
   ShieldCheck, 
   Truck, 
@@ -327,6 +328,17 @@ export const AdminDashboard: React.FC = () => {
       {/* IoT Traffic Signal Priority & ESP32 Preemption HUD */}
       <div id="admin-traffic-signals-section">
         <TrafficSignalHUD />
+      </div>
+
+      {/* Real-time Fleet Geolocation Live Map */}
+      <div id="admin-fleet-map-section">
+        <AdminFleetLiveMap
+          initialAmbulances={ambulances}
+          showToast={showToast}
+          onSelectAmbulance={(amb) => {
+            showToast?.(`Selected ${amb.vehicle_number} (${amb.status})`, 'info');
+          }}
+        />
       </div>
 
       {/* AMBULANCE FLEET MANAGEMENT PANEL */}

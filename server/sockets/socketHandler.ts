@@ -211,6 +211,24 @@ async function checkTrafficJunctionApproach(
 }
 
 // Global broadcasting helpers for backend controllers
+export function broadcastAmbulanceLocation(data: AmbulanceLocationPayload) {
+  if (!ioInstance) return;
+  const enrichedPayload = {
+    ...data,
+    timestamp: data.timestamp || new Date().toISOString(),
+  };
+
+  // Broadcast to specific emergency room if on active mission
+  if (data.emergencyId) {
+    ioInstance.to(`emergency_${data.emergencyId}`).emit('ambulance_location_update', enrichedPayload);
+  }
+
+  // Broadcast to all admins and drivers and global fleet listeners
+  ioInstance.to('role_admin').emit('ambulance_location_update', enrichedPayload);
+  ioInstance.to('role_driver').emit('ambulance_location_update', enrichedPayload);
+  ioInstance.emit('fleet_ambulance_location', enrichedPayload);
+}
+
 export function broadcastEmergencyCreated(emergency: any) {
   if (!ioInstance) return;
   ioInstance.emit('emergency_created', emergency);

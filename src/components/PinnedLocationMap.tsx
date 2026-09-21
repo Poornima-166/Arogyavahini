@@ -1,6 +1,7 @@
 import React, { useEffect, useRef } from 'react';
 import L from '../utils/leafletPatch';
 import { Crosshair, MapPin, ShieldCheck } from 'lucide-react';
+import { createBaseTileLayer, isValidLatLng, sanitizeCoordinates, BENGALURU_DEFAULT_COORDS } from '../utils/mapConfig';
 
 interface PinnedLocationMapProps {
   latitude: number;
@@ -24,6 +25,8 @@ export const PinnedLocationMap: React.FC<PinnedLocationMapProps> = ({
   const markerRef = useRef<L.Marker | null>(null);
   const circleRef = useRef<L.Circle | null>(null);
 
+  const [sanitizedLat, sanitizedLng] = sanitizeCoordinates(latitude, longitude, BENGALURU_DEFAULT_COORDS);
+
   useEffect(() => {
     if (!mapContainerRef.current) return;
 
@@ -35,21 +38,21 @@ export const PinnedLocationMap: React.FC<PinnedLocationMapProps> = ({
 
       const map = L.map(mapContainerRef.current, {
         zoomControl: false,
-        attributionControl: false,
-      }).setView([latitude, longitude], 16);
+        attributionControl: true,
+      }).setView([sanitizedLat, sanitizedLng], 16);
 
       L.control.zoom({ position: 'bottomright' }).addTo(map);
 
-      L.tileLayer('https://{s}.basemaps.cartocdn.com/rastertiles/voyager/{z}/{x}/{y}{r}.png', {
-        maxZoom: 19,
-        subdomains: 'abcd',
-      }).addTo(map);
+      // OpenStreetMap standard tile layer (zero API keys required, zero watermarks)
+      createBaseTileLayer().addTo(map);
 
       mapInstanceRef.current = map;
     }
 
     const map = mapInstanceRef.current;
     if (!map) return;
+
+    if (!isValidLatLng(latitude, longitude)) return;
 
     // Update marker
     const pinIcon = L.divIcon({
@@ -111,7 +114,7 @@ export const PinnedLocationMap: React.FC<PinnedLocationMapProps> = ({
     } catch {
       // safe fallback
     }
-  }, [latitude, longitude, accuracy]);
+  }, [latitude, longitude, accuracy, sanitizedLat, sanitizedLng]);
 
   useEffect(() => {
     return () => {
