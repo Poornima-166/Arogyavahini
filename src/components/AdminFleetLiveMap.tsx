@@ -487,7 +487,7 @@ export const AdminFleetLiveMap: React.FC<AdminFleetLiveMapProps> = ({
       </div>
 
       {/* Map Container */}
-      <div className="relative">
+      <div className="relative isolate z-0">
         <div
           ref={mapContainerRef}
           id="admin-leaflet-fleet-map"

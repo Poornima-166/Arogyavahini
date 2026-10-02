@@ -419,7 +419,7 @@ export const LeafletLiveMap: React.FC<LeafletLiveMapProps> = ({
   };
 
   return (
-    <div className="relative w-full h-[320px] sm:h-[400px] rounded-b-none overflow-hidden bg-slate-950">
+    <div className="relative w-full h-[320px] sm:h-[400px] rounded-b-none overflow-hidden bg-slate-950 isolate z-0">
       {/* Real-time Map Container */}
       <div ref={mapContainerRef} className="w-full h-full z-0" />
 

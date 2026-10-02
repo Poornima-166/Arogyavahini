@@ -35,12 +35,24 @@ import {
   Heart,
   AlertTriangle,
   Users,
+  Menu,
+  Bell,
+  Flame,
+  Settings
 } from 'lucide-react';
+import { HospitalSidebar, HospitalTab } from './hospital/HospitalSidebar';
 
 export const AdminDashboard: React.FC = () => {
-  const { showToast } = useAuth();
+  const { showToast, logout } = useAuth();
   const { t } = useLanguage();
-  const { fetchNotifications } = useNotifications();
+  const { unreadCount, fetchNotifications } = useNotifications();
+
+  // Tab-based navigation & sidebar state
+  const [activeTab, setActiveTab] = useState<HospitalTab>('dashboard');
+  const [isCollapsed, setIsCollapsed] = useState(false);
+  const [isMobileSidebarOpen, setIsMobileSidebarOpen] = useState(false);
+  const [showSettingsModal, setShowSettingsModal] = useState(false);
+  const [showProfileModal, setShowProfileModal] = useState(false);
 
   const [stats, setStats] = useState<SystemStats | null>(null);
   const [emergencies, setEmergencies] = useState<EmergencyRequest[]>([]);
@@ -221,7 +233,115 @@ export const AdminDashboard: React.FC = () => {
   });
 
   return (
-    <div id="admin-dashboard-root" className="space-y-6 pb-12">
+    <div id="hospital-portal-root" className="min-h-[calc(100vh-4rem)] bg-slate-100 dark:bg-slate-950 text-slate-900 dark:text-slate-100 flex flex-col md:flex-row w-full">
+      {/* MOBILE TOPBAR WITH MENU TRIGGER & ACTIVE SOS BADGE */}
+      <div className="md:hidden bg-white dark:bg-slate-900 border-b border-slate-200 dark:border-slate-800 p-3 flex items-center justify-between sticky top-16 z-30 shadow-xs">
+        <button
+          type="button"
+          onClick={() => setIsMobileSidebarOpen(!isMobileSidebarOpen)}
+          className="p-2 rounded-xl bg-slate-100 dark:bg-slate-800 text-slate-700 dark:text-slate-200 font-bold flex items-center gap-2 cursor-pointer"
+        >
+          {isMobileSidebarOpen ? <X className="w-5 h-5" /> : <Menu className="w-5 h-5" />}
+          <span className="text-xs">Hospital Menu</span>
+        </button>
+
+        <div className="flex items-center gap-2">
+          {stats && stats.activeEmergencies > 0 && (
+            <button
+              type="button"
+              onClick={() => {
+                setActiveTab('emergencies');
+                setIsMobileSidebarOpen(false);
+                const el = document.getElementById('admin-emergency-feed');
+                if (el) el.scrollIntoView({ behavior: 'smooth', block: 'start' });
+              }}
+              className="px-2.5 py-1 rounded-full bg-red-600 text-white font-black text-[10px] animate-pulse flex items-center gap-1 cursor-pointer"
+            >
+              <Flame className="w-3 h-3" />
+              <span>{stats.activeEmergencies} Active SOS</span>
+            </button>
+          )}
+
+          <button
+            type="button"
+            onClick={() => {
+              setActiveTab('notifications');
+              setIsMobileSidebarOpen(false);
+            }}
+            className="relative p-2 rounded-xl bg-slate-100 dark:bg-slate-800 text-slate-700 dark:text-slate-200 cursor-pointer"
+          >
+            <Bell className="w-4 h-4" />
+            {unreadCount > 0 && (
+              <span className="absolute -top-1 -right-1 w-4 h-4 rounded-full bg-red-600 text-white text-[9px] font-bold flex items-center justify-center">
+                {unreadCount}
+              </span>
+            )}
+          </button>
+        </div>
+      </div>
+
+      {/* MOBILE BACKDROP OVERLAY */}
+      {isMobileSidebarOpen && (
+        <div 
+          onClick={() => setIsMobileSidebarOpen(false)}
+          className="md:hidden fixed inset-0 bg-slate-950/60 backdrop-blur-xs z-30 top-16"
+        />
+      )}
+
+      {/* FIXED/COLLAPSIBLE HOSPITAL SIDEBAR */}
+      <div className={`${isMobileSidebarOpen ? 'block' : 'hidden'} md:block fixed md:sticky top-16 left-0 h-[calc(100vh-4rem)] z-30`}>
+        <HospitalSidebar
+          activeTab={activeTab}
+          onSelectTab={(tab) => {
+            setActiveTab(tab);
+            setIsMobileSidebarOpen(false);
+            if (tab === 'profile') {
+              setShowProfileModal(true);
+              return;
+            }
+            if (tab === 'settings') {
+              setShowSettingsModal(true);
+              return;
+            }
+            const sectionMap: Record<string, string> = {
+              dashboard: 'admin-dashboard-root',
+              emergencies: 'admin-emergency-feed',
+              trauma: 'admin-er-trauma-section',
+              'patient-info': 'admin-er-trauma-section',
+              ambulances: 'admin-fleet-section',
+              'fleet-map': 'admin-fleet-map-section',
+              wards: 'admin-hospitals-section',
+              traffic: 'admin-traffic-signals-section',
+              personnel: 'admin-users-section',
+              reports: 'admin-reports-section',
+              history: 'admin-reports-section',
+            };
+            const targetId = sectionMap[tab];
+            if (targetId) {
+              const el = document.getElementById(targetId);
+              if (el) {
+                el.scrollIntoView({ behavior: 'smooth', block: 'start' });
+              }
+            } else if (tab === 'dashboard') {
+              window.scrollTo({ top: 0, behavior: 'smooth' });
+            }
+          }}
+          isCollapsed={isCollapsed}
+          onToggleCollapse={() => setIsCollapsed(!isCollapsed)}
+          hospitalName="Command Center"
+          activeEmergenciesCount={stats?.activeEmergencies || 0}
+          availableAmbulancesCount={stats?.availableAmbulances || 0}
+          wardDiversionCount={hospitals.filter((h) => h.ward_capacity === 'FULL').length}
+          unreadNotificationsCount={unreadCount}
+          onOpenSettingsModal={() => setShowSettingsModal(true)}
+          onOpenProfileModal={() => setShowProfileModal(true)}
+          onLogout={logout}
+        />
+      </div>
+
+      {/* MAIN SCROLLABLE CONTENT AREA */}
+      <main className="flex-1 p-4 sm:p-6 lg:p-8 max-w-7xl mx-auto w-full overflow-y-auto space-y-6">
+        <div id="admin-dashboard-root" className="space-y-6 pb-12">
       {/* Header Banner */}
       <div className="bg-white dark:bg-slate-900 rounded-2xl p-6 border border-slate-200 dark:border-slate-800 shadow-xs flex flex-col sm:flex-row items-start sm:items-center justify-between gap-4">
         <div className="flex items-center gap-3">
@@ -1085,6 +1205,120 @@ export const AdminDashboard: React.FC = () => {
         onClose={() => setReportModalEmergencyId(null)}
         fallbackEmergency={fallbackReportEmergency}
       />
+
+      {/* Hospital System Settings Modal */}
+      {showSettingsModal && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-slate-950/70 backdrop-blur-xs">
+          <div className="bg-white dark:bg-slate-900 w-full max-w-md rounded-2xl shadow-2xl border border-slate-200 dark:border-slate-800 overflow-hidden animate-in zoom-in-95 duration-150">
+            <div className="p-5 bg-slate-900 dark:bg-slate-950 text-white flex items-center justify-between border-b border-slate-800">
+              <div className="flex items-center gap-2">
+                <Settings className="w-5 h-5 text-blue-400" />
+                <h3 className="font-bold text-base">Hospital Command Settings</h3>
+              </div>
+              <button 
+                onClick={() => setShowSettingsModal(false)}
+                className="p-1 rounded-lg text-slate-400 hover:text-white hover:bg-slate-800 transition cursor-pointer"
+              >
+                <X className="w-5 h-5" />
+              </button>
+            </div>
+            <div className="p-6 space-y-4 text-xs">
+              <div className="bg-slate-50 dark:bg-slate-800/60 p-4 rounded-xl space-y-2 border border-slate-200 dark:border-slate-700">
+                <span className="font-bold text-slate-900 dark:text-white block">System Reset & Fleet Restore</span>
+                <p className="text-slate-500 dark:text-slate-400 leading-relaxed">
+                  Restore default fleet telemetry, reset simulated emergencies, and clear resolved calls for a fresh command demonstration.
+                </p>
+                <button
+                  type="button"
+                  onClick={() => {
+                    handleResetSystemData();
+                    setShowSettingsModal(false);
+                  }}
+                  className="w-full py-2 px-3 bg-red-600 hover:bg-red-700 text-white rounded-lg font-bold flex items-center justify-center gap-2 transition cursor-pointer"
+                >
+                  <RotateCcw className="w-4 h-4" />
+                  <span>Restore Default Fleet & Clear Calls</span>
+                </button>
+              </div>
+
+              <div className="flex justify-end pt-2">
+                <button
+                  type="button"
+                  onClick={() => setShowSettingsModal(false)}
+                  className="px-4 py-2 rounded-xl bg-slate-100 dark:bg-slate-800 text-slate-700 dark:text-slate-200 font-semibold cursor-pointer"
+                >
+                  Close
+                </button>
+              </div>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* Hospital Command Profile Modal */}
+      {showProfileModal && (
+        <div id="admin-profile-modal" className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-slate-950/70 backdrop-blur-xs">
+          <div className="bg-white dark:bg-slate-900 w-full max-w-md rounded-2xl shadow-2xl border border-slate-200 dark:border-slate-800 overflow-hidden animate-in zoom-in-95 duration-150">
+            <div className="p-5 bg-blue-600 text-white flex items-center justify-between">
+              <div className="flex items-center gap-2">
+                <ShieldCheck className="w-5 h-5" />
+                <h3 className="font-bold text-base">Hospital Command Profile</h3>
+              </div>
+              <button 
+                onClick={() => setShowProfileModal(false)}
+                className="p-1 rounded-lg text-white/80 hover:text-white hover:bg-white/20 transition cursor-pointer"
+              >
+                <X className="w-5 h-5" />
+              </button>
+            </div>
+            <div className="p-6 space-y-4 text-xs">
+              <div className="flex items-center gap-3 p-3 bg-slate-50 dark:bg-slate-800/60 rounded-xl border border-slate-200 dark:border-slate-700">
+                <div className="w-12 h-12 rounded-xl bg-blue-600 text-white flex items-center justify-center font-bold text-lg">
+                  HC
+                </div>
+                <div>
+                  <h4 className="font-bold text-sm text-slate-900 dark:text-white">Emergency Operations Center</h4>
+                  <p className="text-slate-500 dark:text-slate-400 text-[11px]">Command & Dispatch Center • Sector 108</p>
+                  <span className="inline-block mt-1 px-2 py-0.5 rounded-full bg-emerald-500/20 text-emerald-400 font-bold text-[10px]">
+                    ● Active Dispatch Authority
+                  </span>
+                </div>
+              </div>
+
+              <div className="space-y-2 border-t border-slate-200 dark:border-slate-800 pt-3">
+                <div className="flex justify-between py-1">
+                  <span className="text-slate-500 dark:text-slate-400">Jurisdiction</span>
+                  <span className="font-semibold text-slate-900 dark:text-white">Metropolitan Trauma Network</span>
+                </div>
+                <div className="flex justify-between py-1">
+                  <span className="text-slate-500 dark:text-slate-400">Dispatch Protocol</span>
+                  <span className="font-semibold text-slate-900 dark:text-white">Arogyavahini CAD-Link v2.4</span>
+                </div>
+                <div className="flex justify-between py-1">
+                  <span className="text-slate-500 dark:text-slate-400">Connected Hubs</span>
+                  <span className="font-semibold text-slate-900 dark:text-white">{hospitals.length} Hospitals</span>
+                </div>
+                <div className="flex justify-between py-1">
+                  <span className="text-slate-500 dark:text-slate-400">Active Ambulances</span>
+                  <span className="font-semibold text-slate-900 dark:text-white">{ambulances.length} Units</span>
+                </div>
+              </div>
+
+              <div className="flex justify-end pt-2">
+                <button
+                  type="button"
+                  onClick={() => setShowProfileModal(false)}
+                  className="px-4 py-2 rounded-xl bg-slate-100 dark:bg-slate-800 text-slate-700 dark:text-slate-200 font-semibold cursor-pointer"
+                >
+                  Close
+                </button>
+              </div>
+            </div>
+          </div>
+        </div>
+      )}
+        </div>
+      </main>
     </div>
   );
 };

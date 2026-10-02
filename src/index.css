@@ -266,3 +266,34 @@ body.high-contrast {
   box-shadow: 0 0 20px #ffe600 !important;
 }
 
+/* =========================================================================
+   11. LEAFLET MAP ISOLATION & APPLICATION MODAL STACKING HIERARCHY
+   Ensures Leaflet maps create an isolated stacking context so internal
+   panes (markers, controls, popups) are bounded and cannot bleed above
+   viewport modals and overlays.
+   ========================================================================= */
+
+/* Confine all Leaflet internal panes to their own stacking context */
+.leaflet-container {
+  isolation: isolate !important;
+  position: relative !important;
+  z-index: 0 !important;
+}
+
+/* Ensure #auth-modal-backdrop is a true viewport overlay above all application elements */
+#auth-modal-backdrop {
+  position: fixed !important;
+  inset: 0 !important;
+  width: 100vw !important;
+  height: 100vh !important;
+  z-index: 99999 !important;
+  isolation: isolate !important;
+  pointer-events: auto !important;
+}
+
+#auth-modal-content {
+  position: relative !important;
+  z-index: 100000 !important;
+  pointer-events: auto !important;
+}
+

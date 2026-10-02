@@ -146,7 +146,7 @@ export const PinnedLocationMap: React.FC<PinnedLocationMapProps> = ({
   };
 
   return (
-    <div className="relative rounded-xl overflow-hidden border border-slate-200 dark:border-slate-700 bg-slate-100 dark:bg-slate-900">
+    <div className="relative isolate z-0 rounded-xl overflow-hidden border border-slate-200 dark:border-slate-700 bg-slate-100 dark:bg-slate-900">
       <div ref={mapContainerRef} className="w-full h-44 sm:h-52 z-0" />
 
       {/* Floating control bar on top */}

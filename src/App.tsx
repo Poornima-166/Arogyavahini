@@ -238,11 +238,11 @@ function AppContent() {
             <div className="flex items-center gap-2">
               <WifiOff className="w-4 h-4 shrink-0 text-amber-100 animate-pulse" />
               <span>
-                <strong>Offline Notice:</strong> Internet connection lost. Emergency SOS requests and real-time fleet telemetry are suspended until connection is restored.
+                <strong>{t.offlineNotice}</strong> {t.offlineNoticeDesc}
               </span>
             </div>
             <span className="hidden sm:inline-flex px-2 py-0.5 rounded bg-amber-700/80 dark:bg-amber-800/80 text-[11px] font-mono uppercase tracking-wider text-amber-100 border border-amber-500/50">
-              Offline
+              {t.offlineNotice}
             </span>
           </div>
         </div>
@@ -259,7 +259,7 @@ function AppContent() {
             <div className="flex items-center gap-2">
               <Wifi className="w-4 h-4 shrink-0 text-emerald-100" />
               <span>
-                <strong>Online:</strong> Internet connection restored. Real-time emergency synchronization is active.
+                <strong>{t.onlineNotice}</strong> {t.onlineNoticeDesc}
               </span>
             </div>
             <button
@@ -267,7 +267,7 @@ function AppContent() {
               onClick={() => setShowRestoredNotice(false)}
               className="text-emerald-100 hover:text-white text-xs font-semibold px-2 py-0.5 rounded hover:bg-emerald-700 transition cursor-pointer"
             >
-              Dismiss
+              {t.dismiss}
             </button>
           </div>
         </div>
@@ -297,9 +297,11 @@ function AppContent() {
       <Navbar openAuthModal={openAuth} />
 
       {/* Main Page Body: Render exclusively based on authenticated user role */}
-      <main className="flex-1 max-w-7xl w-full mx-auto px-4 sm:px-6 pt-6">
+      <div className="flex-1 w-full flex flex-col">
         {!isAuthenticated || !user ? (
-          <HomeHero onOpenAuth={() => openAuth('login')} />
+          <main className="flex-1 max-w-7xl w-full mx-auto px-4 sm:px-6 pt-6">
+            <HomeHero onOpenAuth={() => openAuth('login')} />
+          </main>
         ) : role === 'driver' ? (
           <DriverDashboard />
         ) : role === 'patient' ? (
@@ -307,48 +309,52 @@ function AppContent() {
         ) : role === 'admin' ? (
           <AdminDashboard />
         ) : (
-          <HomeHero onOpenAuth={() => openAuth('login')} />
+          <main className="flex-1 max-w-7xl w-full mx-auto px-4 sm:px-6 pt-6">
+            <HomeHero onOpenAuth={() => openAuth('login')} />
+          </main>
         )}
-      </main>
+      </div>
 
-      {/* Production-Grade Clean Footer */}
-      <footer className="mt-12 bg-white dark:bg-slate-900 border-t border-slate-200 dark:border-slate-800 py-6 px-4 sm:px-6 text-xs text-slate-500 dark:text-slate-400 transition-colors">
-        <div className="max-w-7xl mx-auto flex flex-col md:flex-row items-center justify-between gap-4">
-          <div className="flex items-center gap-3">
-            <div className="w-8 h-8 rounded-lg bg-red-600 flex items-center justify-center text-white font-bold text-sm shadow-xs">
-              <Activity className="w-4 h-4" />
+      {/* Production-Grade Clean Footer (Visible on public landing page) */}
+      {!isAuthenticated && (
+        <footer className="mt-12 bg-white dark:bg-slate-900 border-t border-slate-200 dark:border-slate-800 py-6 px-4 sm:px-6 text-xs text-slate-500 dark:text-slate-400 transition-colors">
+          <div className="max-w-7xl mx-auto flex flex-col md:flex-row items-center justify-between gap-4">
+            <div className="flex items-center gap-3">
+              <div className="w-8 h-8 rounded-lg bg-red-600 flex items-center justify-center text-white font-bold text-sm shadow-xs">
+                <Activity className="w-4 h-4" />
+              </div>
+              <div>
+                <span className="font-bold text-slate-900 dark:text-white block text-sm">
+                  {t.appTitle}
+                </span>
+                <span className="text-[11px] text-slate-500 dark:text-slate-400 font-medium">
+                  {t.appSubtitle}
+                </span>
+              </div>
             </div>
-            <div>
-              <span className="font-bold text-slate-900 dark:text-white block text-sm">
-                {t.appTitle}
+
+            <div className="flex flex-wrap items-center justify-center gap-3 text-slate-600 dark:text-slate-300 font-medium text-xs">
+              <span className="flex items-center gap-1.5 bg-red-50 dark:bg-red-950/50 text-red-700 dark:text-red-400 px-3 py-1 rounded-md border border-red-200 dark:border-red-900 font-bold">
+                <PhoneCall className="w-3.5 h-3.5" />
+                <span>{t.footerEmergencyHotline}</span>
               </span>
-              <span className="text-[11px] text-slate-500 dark:text-slate-400 font-medium">
-                {t.appSubtitle}
+              <span className="flex items-center gap-1.5 bg-slate-100 dark:bg-slate-800 px-3 py-1 rounded-md border border-slate-200 dark:border-slate-700">
+                <ShieldCheck className="w-3.5 h-3.5 text-blue-600 dark:text-blue-400" />
+                <span>{t.verifiedDispatch}</span>
               </span>
             </div>
-          </div>
 
-          <div className="flex flex-wrap items-center justify-center gap-3 text-slate-600 dark:text-slate-300 font-medium text-xs">
-            <span className="flex items-center gap-1.5 bg-red-50 dark:bg-red-950/50 text-red-700 dark:text-red-400 px-3 py-1 rounded-md border border-red-200 dark:border-red-900 font-bold">
-              <PhoneCall className="w-3.5 h-3.5" />
-              <span>{t.footerEmergencyHotline}</span>
-            </span>
-            <span className="flex items-center gap-1.5 bg-slate-100 dark:bg-slate-800 px-3 py-1 rounded-md border border-slate-200 dark:border-slate-700">
-              <ShieldCheck className="w-3.5 h-3.5 text-blue-600 dark:text-blue-400" />
-              <span>24/7 Verified Medical Dispatch</span>
-            </span>
+            <div className="text-center md:text-right">
+              <p className="text-[11px] text-slate-400 dark:text-slate-500">
+                {t.footerDesc}
+              </p>
+            </div>
           </div>
+        </footer>
+      )}
 
-          <div className="text-center md:text-right">
-            <p className="text-[11px] text-slate-400 dark:text-slate-500">
-              {t.footerDesc}
-            </p>
-          </div>
-        </div>
-      </footer>
-
-      {/* Floating Emergency SOS Quick Access Trigger (Responsive: thumb-dock on mobile, bottom-left on desktop) */}
-      <div className="fixed bottom-5 right-4 sm:bottom-6 sm:left-6 sm:right-auto z-40 flex items-center gap-2">
+      {/* Floating Emergency SOS Quick Access Trigger */}
+      <div className="fixed bottom-5 right-4 sm:bottom-6 sm:right-6 z-40 flex items-center gap-2">
         {/* Direct Mobile Speed Dial Call 108 */}
         <a
           href="tel:108"

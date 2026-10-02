@@ -21,6 +21,7 @@ import { AmbulanceProximityAlertBanner } from './AmbulanceProximityAlertBanner';
 import { PatientVoiceAssistant } from './PatientVoiceAssistant';
 import { speakInstruction, cancelSpeech } from '../utils/voiceNavigation';
 import { socketService } from '../services/socketService';
+import { PatientSidebar, PatientTab } from './patient/PatientSidebar';
 import { 
   AlertOctagon, 
   MapPin, 
@@ -52,7 +53,10 @@ import {
   Star,
   Radio,
   QrCode,
-  X
+  X,
+  Menu,
+  Bell,
+  Home
 } from 'lucide-react';
 
 function calculateHaversineDistanceKm(lat1: number, lon1: number, lat2: number, lon2: number): number {
@@ -70,9 +74,14 @@ function calculateHaversineDistanceKm(lat1: number, lon1: number, lat2: number, 
 }
 
 export const PatientDashboard: React.FC = () => {
-  const { user, updateUser, showToast } = useAuth();
+  const { user, updateUser, showToast, logout } = useAuth();
   const { language, t } = useLanguage();
-  const { fetchNotifications } = useNotifications();
+  const { unreadCount, fetchNotifications } = useNotifications();
+
+  // Tab-based navigation & sidebar state
+  const [activeTab, setActiveTab] = useState<PatientTab>('dashboard');
+  const [isCollapsed, setIsCollapsed] = useState(false);
+  const [isMobileSidebarOpen, setIsMobileSidebarOpen] = useState(false);
 
   const EMERGENCY_TYPES = [
     { 
@@ -656,7 +665,125 @@ export const PatientDashboard: React.FC = () => {
   };
 
   return (
-    <div id="patient-dashboard-root" className="space-y-6 pb-12">
+    <div id="patient-portal-root" className="min-h-[calc(100vh-4rem)] bg-slate-100 dark:bg-slate-950 text-slate-900 dark:text-slate-100 flex flex-col md:flex-row w-full">
+      {/* MOBILE TOPBAR WITH MENU TRIGGER & QUICK SOS */}
+      <div className="md:hidden bg-white dark:bg-slate-900 border-b border-slate-200 dark:border-slate-800 p-3 flex items-center justify-between sticky top-16 z-30 shadow-xs">
+        <button
+          type="button"
+          onClick={() => setIsMobileSidebarOpen(!isMobileSidebarOpen)}
+          className="p-2 rounded-xl bg-slate-100 dark:bg-slate-800 text-slate-700 dark:text-slate-200 font-bold flex items-center gap-2 cursor-pointer"
+        >
+          {isMobileSidebarOpen ? <X className="w-5 h-5" /> : <Menu className="w-5 h-5" />}
+          <span className="text-xs">Patient Menu</span>
+        </button>
+
+        <div className="flex items-center gap-2">
+          {activeEmergency ? (
+            <button
+              type="button"
+              onClick={() => {
+                setActiveTab('tracking');
+                setIsMobileSidebarOpen(false);
+                const el = document.getElementById('active-emergency-status-card');
+                if (el) el.scrollIntoView({ behavior: 'smooth', block: 'start' });
+              }}
+              className="px-2.5 py-1 rounded-full bg-emerald-600 text-white font-black text-[10px] animate-pulse flex items-center gap-1 cursor-pointer"
+            >
+              <Truck className="w-3 h-3" />
+              <span>SOS #{activeEmergency.id} Live</span>
+            </button>
+          ) : (
+            <button
+              type="button"
+              onClick={() => {
+                setActiveTab('sos');
+                setIsMobileSidebarOpen(false);
+                const el = document.getElementById('patient-emergency-sos');
+                if (el) el.scrollIntoView({ behavior: 'smooth', block: 'start' });
+              }}
+              className="px-3 py-1 rounded-full bg-red-600 hover:bg-red-500 text-white font-black text-[10px] animate-pulse flex items-center gap-1 cursor-pointer"
+            >
+              <AlertOctagon className="w-3 h-3" />
+              <span>EMERGENCY SOS</span>
+            </button>
+          )}
+
+          <button
+            type="button"
+            onClick={() => {
+              setActiveTab('notifications');
+              setIsMobileSidebarOpen(false);
+            }}
+            className="relative p-2 rounded-xl bg-slate-100 dark:bg-slate-800 text-slate-700 dark:text-slate-200 cursor-pointer"
+          >
+            <Bell className="w-4 h-4" />
+            {unreadCount > 0 && (
+              <span className="absolute -top-1 -right-1 w-4 h-4 rounded-full bg-red-600 text-white text-[9px] font-bold flex items-center justify-center">
+                {unreadCount}
+              </span>
+            )}
+          </button>
+        </div>
+      </div>
+
+      {/* MOBILE BACKDROP OVERLAY */}
+      {isMobileSidebarOpen && (
+        <div 
+          onClick={() => setIsMobileSidebarOpen(false)}
+          className="md:hidden fixed inset-0 bg-slate-950/60 backdrop-blur-xs z-30 top-16"
+        />
+      )}
+
+      {/* FIXED/COLLAPSIBLE PATIENT SIDEBAR */}
+      <div className={`${isMobileSidebarOpen ? 'block' : 'hidden'} md:block fixed md:sticky top-16 left-0 h-[calc(100vh-4rem)] z-30`}>
+        <PatientSidebar
+          activeTab={activeTab}
+          onSelectTab={(tab) => {
+            setActiveTab(tab);
+            setIsMobileSidebarOpen(false);
+            const sectionMap: Record<string, string> = {
+              dashboard: 'patient-dashboard-root',
+              sos: 'patient-emergency-sos',
+              status: 'active-emergency-status-card',
+              tracking: 'active-emergency-status-card',
+              'emergency-info': 'active-emergency-status-card',
+              profile: 'patient-profile-section',
+              hospitals: 'patient-live-radar-section',
+              history: 'patient-requests-history',
+              firstaid: 'patient-first-aid-section',
+              notifications: 'patient-dashboard-root',
+              settings: 'patient-profile-section',
+            };
+            const targetId = sectionMap[tab];
+            if (targetId) {
+              const el = document.getElementById(targetId) || (targetId === 'active-emergency-status-card' ? document.getElementById('patient-emergency-sos') : null);
+              if (el) {
+                el.scrollIntoView({ behavior: 'smooth', block: 'start' });
+              }
+            } else if (tab === 'dashboard') {
+              window.scrollTo({ top: 0, behavior: 'smooth' });
+            }
+          }}
+          isCollapsed={isCollapsed}
+          onToggleCollapse={() => setIsCollapsed(!isCollapsed)}
+          userName={user?.name || 'Citizen'}
+          hasActiveEmergency={Boolean(activeEmergency)}
+          activeEmergency={activeEmergency}
+          unreadNotificationsCount={unreadCount}
+          onOpenSos={() => {
+            setActiveTab('sos');
+            setIsMobileSidebarOpen(false);
+            const el = document.getElementById('patient-emergency-sos');
+            if (el) el.scrollIntoView({ behavior: 'smooth', block: 'start' });
+          }}
+          onOpenMedicalProfileModal={() => setIsMedicalProfileModalOpen(true)}
+          onLogout={logout}
+        />
+      </div>
+
+      {/* MAIN SCROLLABLE CONTENT AREA */}
+      <main className="flex-1 p-4 sm:p-6 lg:p-8 max-w-7xl mx-auto w-full overflow-y-auto space-y-6">
+        <div id="patient-dashboard-root" className="space-y-6 pb-12">
       {/* Header Banner */}
       <div id="patient-profile-section" className="bg-white dark:bg-slate-900 rounded-2xl p-6 border border-slate-200 dark:border-slate-800 shadow-xs flex flex-col sm:flex-row items-start sm:items-center justify-between gap-4">
         <div>
@@ -702,19 +829,10 @@ export const PatientDashboard: React.FC = () => {
             className="p-2 px-3 rounded-lg border border-slate-200 dark:border-slate-700 bg-slate-50 dark:bg-slate-800 text-slate-700 dark:text-slate-200 hover:bg-slate-100 dark:hover:bg-slate-700 transition-colors flex items-center gap-1.5 text-xs font-semibold cursor-pointer"
           >
             <RefreshCw className="w-3.5 h-3.5 text-slate-500 dark:text-slate-400" />
-            <span>Refresh</span>
+            <span>{t.refresh}</span>
           </button>
         </div>
       </div>
-
-      {/* Patient Emergency Medical ID & Next of Kin Card */}
-      <PatientMedicalProfileCard
-        user={user}
-        onOpenEditModal={() => setIsMedicalProfileModalOpen(true)}
-        onProfileUpdated={(updatedUser) => {
-          updateUser(updatedUser);
-        }}
-      />
 
       {/* 2KM AUTOMATED PROXIMITY ALERT BANNER */}
       {activeEmergency &&
@@ -764,7 +882,7 @@ export const PatientDashboard: React.FC = () => {
                   <span className={`px-2.5 py-0.5 rounded-full text-white text-[11px] font-extrabold uppercase tracking-wider ${
                     activeEmergency.status === 'COMPLETED' ? 'bg-emerald-600' : 'bg-red-600'
                   }`}>
-                    {activeEmergency.status === 'COMPLETED' ? `MISSION COMPLETED #${activeEmergency.id}` : `LIVE SOS #${activeEmergency.id}`}
+                    {activeEmergency.status === 'COMPLETED' ? `${t.missionCompleted} #${activeEmergency.id}` : `${t.liveSos} #${activeEmergency.id}`}
                   </span>
                   <span className={`inline-flex items-center gap-1 px-2.5 py-0.5 rounded-full text-[11px] font-bold ${
                     activeEmergency.status === 'COMPLETED'
@@ -774,15 +892,15 @@ export const PatientDashboard: React.FC = () => {
                     {activeEmergency.status !== 'COMPLETED' && <span className="w-2 h-2 rounded-full bg-amber-400 animate-ping" />}
                     {activeEmergency.status === 'COMPLETED' && <Check className="w-3 h-3 text-emerald-400" />}
                     {activeEmergency.status === 'WAITING_FOR_DRIVER' 
-                      ? 'Searching Fleet' 
+                      ? t.searchingFleet 
                       : activeEmergency.status === 'DRIVER_ACCEPTED' 
-                      ? 'Ambulance Assigned' 
+                      ? t.ambulanceAssigned 
                       : activeEmergency.status === 'ON_THE_WAY' 
-                      ? 'En Route to You' 
+                      ? t.enRouteToYou 
                       : activeEmergency.status === 'REACHED' 
-                      ? 'Arrived at Scene' 
+                      ? t.arrivedAtScene 
                       : activeEmergency.status === 'COMPLETED'
-                      ? 'Handover Completed'
+                      ? t.handoverCompleted 
                       : activeEmergency.status}
                   </span>
                   <span className="text-xs text-slate-400 font-mono">
@@ -790,7 +908,7 @@ export const PatientDashboard: React.FC = () => {
                   </span>
                 </div>
                 <h3 className="text-lg sm:text-xl font-bold text-white mt-1">
-                  {activeEmergency.emergency_type} Emergency
+                  {activeEmergency.emergency_type} {t.emergency}
                 </h3>
               </div>
             </div>
@@ -809,7 +927,7 @@ export const PatientDashboard: React.FC = () => {
                 >
                   <Mic className="w-3.5 h-3.5 text-amber-200 animate-pulse" />
                   <span className="hidden sm:inline">{t.voiceUpdateDispatcher || 'Update Dispatcher with Voice'}</span>
-                  <span className="sm:hidden">Voice Update</span>
+                  <span className="sm:hidden">{t.voiceUpdate}</span>
                 </button>
               )}
               {activeEmergency.status === 'COMPLETED' && (
@@ -820,7 +938,7 @@ export const PatientDashboard: React.FC = () => {
                   className="px-3 py-2 bg-emerald-600 hover:bg-emerald-500 text-white text-xs font-bold rounded-xl transition cursor-pointer shadow-xs flex items-center gap-1.5"
                 >
                   <FileText className="w-3.5 h-3.5" />
-                  <span>View Report</span>
+                  <span>{t.viewReport}</span>
                 </button>
               )}
               {activeEmergency.status === 'COMPLETED' ? (
@@ -831,7 +949,7 @@ export const PatientDashboard: React.FC = () => {
                   className="w-full sm:w-auto px-4 py-2 bg-slate-800 hover:bg-slate-700 text-slate-200 hover:text-white text-xs font-bold rounded-xl transition border border-slate-700 cursor-pointer shadow-xs flex items-center gap-1.5"
                 >
                   <X className="w-3.5 h-3.5" />
-                  <span>Close / New SOS</span>
+                  <span>{t.closeNewSos}</span>
                 </button>
               ) : (
                 <button
@@ -854,10 +972,10 @@ export const PatientDashboard: React.FC = () => {
                 </div>
                 <div>
                   <h4 className="text-sm font-bold text-white">
-                    Emergency Mission Finalized & Patient Handover Completed
+                    {t.emergencyMissionFinalized}
                   </h4>
                   <p className="text-xs text-emerald-200/80">
-                    A comprehensive clinical and operational emergency report has been compiled for your records.
+                    {t.emergencyMissionFinalizedDesc}
                   </p>
                 </div>
               </div>
@@ -869,7 +987,7 @@ export const PatientDashboard: React.FC = () => {
                   className="flex-1 sm:flex-initial px-4 py-2 bg-blue-600 hover:bg-blue-500 text-white rounded-xl text-xs font-bold flex items-center justify-center gap-1.5 shadow-md transition cursor-pointer"
                 >
                   <FileText className="w-3.5 h-3.5" />
-                  <span>View Report</span>
+                  <span>{t.viewReport}</span>
                 </button>
                 <button
                   id="btn-patient-download-emergency-report"
@@ -878,7 +996,7 @@ export const PatientDashboard: React.FC = () => {
                   className="flex-1 sm:flex-initial px-4 py-2 bg-emerald-600 hover:bg-emerald-500 text-white rounded-xl text-xs font-bold flex items-center justify-center gap-1.5 shadow-md transition cursor-pointer"
                 >
                   <Download className="w-3.5 h-3.5" />
-                  <span>Download Report</span>
+                  <span>{t.downloadReport}</span>
                 </button>
               </div>
             </div>
@@ -906,17 +1024,17 @@ export const PatientDashboard: React.FC = () => {
                   </div>
                   <div>
                     <div className="text-[10px] text-blue-300 font-bold uppercase tracking-wider">
-                      Estimated Time of Arrival (Live ETA)
+                      {t.estimatedEta}
                     </div>
                     <div className="text-xl sm:text-2xl font-black text-white flex flex-wrap items-center gap-2">
-                      <span>~{activeEmergencyMetrics?.etaMinutes ?? activeEmergency.current_eta_minutes ?? 8} Mins</span>
+                      <span>~{activeEmergencyMetrics?.etaMinutes ?? activeEmergency.current_eta_minutes ?? 8} {t.mins}</span>
                       <span className="text-xs font-medium text-slate-300">
-                        ({(activeEmergencyMetrics?.distanceKm ?? activeEmergency.current_distance_km ?? 3.2).toFixed(1)} km away)
+                        ({(activeEmergencyMetrics?.distanceKm ?? activeEmergency.current_distance_km ?? 3.2).toFixed(1)} {t.km})
                       </span>
                       {activeEmergencyMetrics?.isWithin2Km && (
                         <span className="px-2 py-0.5 rounded-full bg-amber-500/20 text-amber-300 border border-amber-500/40 text-[10px] font-extrabold uppercase tracking-wider animate-pulse flex items-center gap-1">
                           <span className="w-1.5 h-1.5 rounded-full bg-amber-400 animate-ping" />
-                          <span>Within 2km Alert Zone</span>
+                          <span>{t.within2kmAlertZone}</span>
                         </span>
                       )}
                     </div>
@@ -943,12 +1061,12 @@ export const PatientDashboard: React.FC = () => {
                   </button>
 
                   <div className="px-3 py-1.5 rounded-xl bg-slate-800/80 border border-slate-700 text-xs">
-                    <span className="text-[10px] text-slate-400 uppercase font-semibold block">Live Traffic</span>
-                    <span className="font-bold text-emerald-400">{activeEmergency.current_traffic || 'Low Congestion'}</span>
+                    <span className="text-[10px] text-slate-400 uppercase font-semibold block">{t.liveTraffic}</span>
+                    <span className="font-bold text-emerald-400">{activeEmergency.current_traffic || t.lowCongestion}</span>
                   </div>
                   <div className="px-3 py-1.5 rounded-xl bg-emerald-950/60 border border-emerald-500/40 text-xs text-emerald-300 font-semibold flex items-center gap-1.5">
                     <ShieldCheck className="w-4 h-4 text-emerald-400" />
-                    <span>Green Corridor Active</span>
+                    <span>{t.greenCorridorActive}</span>
                   </div>
 
                   <button
@@ -958,7 +1076,7 @@ export const PatientDashboard: React.FC = () => {
                     title="Open First Responder QR Emergency Health Pass (ICE)"
                   >
                     <QrCode className="w-3.5 h-3.5 text-red-400" />
-                    <span>ICE Health Pass</span>
+                    <span>{t.iceHealthPass}</span>
                   </button>
                 </div>
               </div>
@@ -966,7 +1084,7 @@ export const PatientDashboard: React.FC = () => {
               <div className="bg-amber-950/40 text-amber-200 p-4 border-b border-amber-900/50 flex items-center gap-3 text-xs">
                 <div className="w-3 h-3 rounded-full bg-amber-400 animate-ping shrink-0" />
                 <span>
-                  <strong>Alert Broadcast in Progress:</strong> We are routing your SOS request to the nearest available ambulance units in real time. Please stay on this screen.
+                  <strong>{t.alertBroadcastInProgress}</strong> {t.alertBroadcastDesc}
                 </span>
               </div>
             )
@@ -1002,7 +1120,7 @@ export const PatientDashboard: React.FC = () => {
                       {activeEmergency.ambulance_id ? t.patientAssignedAmbulance : t.navAmbulanceStatus}
                     </span>
                     <h4 className="text-base font-bold font-mono text-slate-900 dark:text-white">
-                      {activeEmergency.vehicle_number || 'Searching for available unit...'}
+                      {activeEmergency.vehicle_number || t.searchingFleet}
                     </h4>
                   </div>
                 </div>
@@ -1036,7 +1154,7 @@ export const PatientDashboard: React.FC = () => {
                       className="inline-flex items-center gap-1.5 px-3 py-1.5 bg-emerald-600 hover:bg-emerald-700 text-white font-bold rounded-lg shadow-xs transition-colors cursor-pointer"
                     >
                       <PhoneCall className="w-3.5 h-3.5" />
-                      <span>{activeEmergency.driver_phone || 'Call Paramedic'}</span>
+                      <span>{activeEmergency.driver_phone || t.callParamedic}</span>
                     </a>
                   </div>
                 </div>
@@ -1048,7 +1166,7 @@ export const PatientDashboard: React.FC = () => {
                   </div>
                   <div className="flex items-center justify-between">
                     <span className="text-slate-500 dark:text-slate-400 font-medium">{t.vehicleNumber}:</span>
-                    <span className="font-semibold text-amber-900 dark:text-amber-300 italic">Broadcasting alert to nearest fleet</span>
+                    <span className="font-semibold text-amber-900 dark:text-amber-300 italic">{t.broadcastingFleetAlert}</span>
                   </div>
                   <div className="p-3 bg-amber-100/70 dark:bg-amber-950/40 rounded-lg border border-amber-200 dark:border-amber-900 text-amber-900 dark:text-amber-300 text-xs font-medium leading-relaxed mt-2">
                     {t.patientActiveAlertDesc}
@@ -1094,31 +1212,31 @@ export const PatientDashboard: React.FC = () => {
                     <Heart className="w-3.5 h-3.5 fill-white" />
                   </div>
                   <h4 className="text-xs font-bold text-slate-900 dark:text-white uppercase tracking-wider">
-                    Clinical Emergency Profile Transmitted to 108 Dispatchers & Paramedics
+                    {t.clinicalProfileTransmitted}
                   </h4>
                 </div>
                 <span className="text-[10px] font-extrabold uppercase px-2 py-0.5 rounded-full bg-emerald-100 dark:bg-emerald-950 text-emerald-700 dark:text-emerald-300 border border-emerald-300 dark:border-emerald-800 flex items-center gap-1">
-                  <Check className="w-2.5 h-2.5" /> Transmitted
+                  <Check className="w-2.5 h-2.5" /> {t.transmitted}
                 </span>
               </div>
 
               <div className="grid grid-cols-1 sm:grid-cols-3 gap-3 text-xs">
                 <div className="p-3 bg-white dark:bg-slate-800 rounded-lg border border-slate-200 dark:border-slate-700">
-                  <span className="text-[10px] font-bold uppercase text-slate-400 block">Blood Group</span>
+                  <span className="text-[10px] font-bold uppercase text-slate-400 block">{t.bloodGroup}</span>
                   <span className="text-sm font-black text-red-600 dark:text-red-400">
                     {activeEmergency.patient_blood_type || user?.blood_type || 'B+'}
                   </span>
                 </div>
 
                 <div className="p-3 bg-white dark:bg-slate-800 rounded-lg border border-slate-200 dark:border-slate-700">
-                  <span className="text-[10px] font-bold uppercase text-amber-600 dark:text-amber-400 block">Known Allergies</span>
+                  <span className="text-[10px] font-bold uppercase text-amber-600 dark:text-amber-400 block">{t.allergies}</span>
                   <span className="text-xs font-bold text-slate-800 dark:text-slate-200 truncate block" title={activeEmergency.patient_allergies || user?.allergies || 'None reported'}>
                     {activeEmergency.patient_allergies || user?.allergies || 'None reported'}
                   </span>
                 </div>
 
                 <div className="p-3 bg-white dark:bg-slate-800 rounded-lg border border-slate-200 dark:border-slate-700">
-                  <span className="text-[10px] font-bold uppercase text-blue-600 dark:text-blue-400 block">Primary Emergency Contact</span>
+                  <span className="text-[10px] font-bold uppercase text-blue-600 dark:text-blue-400 block">{t.primaryEmergencyContact}</span>
                   <span className="text-xs font-bold text-slate-800 dark:text-slate-200 block truncate">
                     {activeEmergency.patient_emergency_contact_name || user?.emergency_contact_name || 'Rajesh Rao'} ({activeEmergency.patient_emergency_contact_relation || user?.emergency_contact_relation || 'Spouse'})
                   </span>
@@ -1136,7 +1254,7 @@ export const PatientDashboard: React.FC = () => {
 
               {(activeEmergency.patient_medical_notes || user?.medical_notes) && (
                 <div className="mt-3 p-2.5 bg-white dark:bg-slate-800 rounded-lg border border-slate-200 dark:border-slate-700 text-xs text-slate-600 dark:text-slate-300">
-                  <span className="font-bold text-slate-800 dark:text-slate-200">Existing Conditions & Medical Directives: </span>
+                  <span className="font-bold text-slate-800 dark:text-slate-200">{t.existingConditionsDirectives} </span>
                   <span>{activeEmergency.patient_medical_notes || user?.medical_notes}</span>
                 </div>
               )}
@@ -1306,27 +1424,27 @@ export const PatientDashboard: React.FC = () => {
                   <div className="mt-3 inline-flex flex-wrap items-center gap-2 px-3 py-1.5 rounded-xl bg-emerald-950/80 border border-emerald-500/40 text-emerald-300 text-xs">
                     <span className="w-2 h-2 rounded-full bg-emerald-400 animate-ping shrink-0" />
                     <span className="font-semibold">
-                      📍 GPS Auto-Pinned: {patientCoords.latitude.toFixed(4)}, {patientCoords.longitude.toFixed(4)}
+                      📍 {t.gpsAutoPinned} {patientCoords.latitude.toFixed(4)}, {patientCoords.longitude.toFixed(4)}
                       {patientCoords.accuracy ? ` (±${patientCoords.accuracy}m)` : ''}
                     </span>
                     <span className="text-[10px] bg-emerald-800/80 text-emerald-100 px-1.5 py-0.5 rounded font-mono font-bold">
-                      Instant 1-Tap SOS
+                      {t.instant1TapSos}
                     </span>
                   </div>
                 ) : isLocating ? (
                   <div className="mt-3 inline-flex items-center gap-2 px-3 py-1.5 rounded-xl bg-amber-950/80 border border-amber-500/40 text-amber-300 text-xs">
                     <Loader2 className="w-3.5 h-3.5 animate-spin text-amber-400 shrink-0" />
-                    <span>Auto-pinning your GPS location via Browser Geolocation API...</span>
+                    <span>{t.autoPinningGps}</span>
                   </div>
                 ) : locationPermissionStatus === 'denied' ? (
                   <div className="mt-3 inline-flex items-center gap-2 px-3 py-1.5 rounded-xl bg-slate-900/80 border border-slate-700 text-slate-300 text-xs">
                     <AlertTriangle className="w-3.5 h-3.5 text-amber-400 shrink-0" />
-                    <span>GPS access blocked. Address can be entered manually below.</span>
+                    <span>{t.locationDenied}</span>
                   </div>
                 ) : (
                   <div className="mt-3 inline-flex items-center gap-2 px-3 py-1.5 rounded-xl bg-blue-950/80 border border-blue-500/40 text-blue-300 text-xs">
                     <Navigation className="w-3.5 h-3.5 text-blue-400 shrink-0" />
-                    <span>Ready to pin live coordinates automatically upon triggering SOS</span>
+                    <span>{t.searchingFleet}</span>
                   </div>
                 )}
               </div>
@@ -1698,12 +1816,8 @@ export const PatientDashboard: React.FC = () => {
           </div>
         </div>
 
-        {/* Right 1 Col: First-Aid Protocols & History */}
+        {/* Right 1 Col: Emergency History & Activity Log */}
         <div className="space-y-6">
-          <div id="patient-first-aid-section">
-            <FirstAidGuide />
-          </div>
-
           {/* Past Emergencies / Activity Log */}
           <div id="patient-requests-history" className="bg-white dark:bg-slate-900 rounded-2xl p-5 border border-slate-200 dark:border-slate-800 shadow-xs space-y-3">
             <div className="flex items-center justify-between border-b border-slate-100 dark:border-slate-800 pb-3">
@@ -1813,6 +1927,22 @@ export const PatientDashboard: React.FC = () => {
         />
       </div>
 
+      {/* SECURE EMERGENCY MEDICAL PROFILE (Supporting Medical Information) */}
+      <div id="patient-profile-section" className="space-y-2 pt-2">
+        <PatientMedicalProfileCard
+          user={user}
+          onOpenEditModal={() => setIsMedicalProfileModalOpen(true)}
+          onProfileUpdated={(updatedUser) => {
+            updateUser(updatedUser);
+          }}
+        />
+      </div>
+
+      {/* FIRST AID GUIDES / SECONDARY PROTOCOLS */}
+      <div id="patient-first-aid-section" className="space-y-2 pt-2">
+        <FirstAidGuide />
+      </div>
+
       {/* Emergency Report Modal */}
       <EmergencyReportModal
         emergencyId={reportModalEmergencyId || 0}
@@ -1848,6 +1978,8 @@ export const PatientDashboard: React.FC = () => {
         onClose={() => setIsHealthPassModalOpen(false)}
         user={user}
       />
+        </div>
+      </main>
     </div>
   );
 };

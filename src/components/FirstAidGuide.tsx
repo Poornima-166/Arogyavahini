@@ -202,7 +202,7 @@ export const FirstAidGuide: React.FC = () => {
           </div>
         </div>
         <span className="text-[10px] font-bold tracking-wider uppercase px-2 py-0.5 rounded bg-slate-800 dark:bg-slate-900 text-amber-400 border border-slate-700">
-          First Aid
+          {t.firstAidGuides || 'First Aid'}
         </span>
       </div>
 

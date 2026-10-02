@@ -18,6 +18,7 @@ import {
   Clock
 } from 'lucide-react';
 import { LiveLocationModal } from './LiveLocationModal';
+import { useLanguage } from '../context/LanguageContext';
 
 interface LiveFleetRadarProps {
   title?: string;
@@ -28,12 +29,15 @@ interface LiveFleetRadarProps {
 }
 
 export const LiveFleetRadar: React.FC<LiveFleetRadarProps> = ({
-  title = 'Live Emergency Fleet & GPS Radar',
-  subtitle = 'Real-time positioning of your location and nearest standby emergency ambulances',
+  title,
+  subtitle,
   heightClass = 'h-[360px] sm:h-[420px]',
   showEmergencyCta = true,
   onTriggerSos,
 }) => {
+  const { t } = useLanguage();
+  const displayTitle = title || t.fleetRadarTitle || 'Live Emergency Fleet & GPS Radar';
+  const displaySubtitle = subtitle || t.fleetRadarSubtitle || 'Real-time positioning of your location and nearest standby emergency ambulances';
   const { userCoords, resolvedAddress, locationSource, requestLocation, lastGpsTimestamp } = useLocation();
   const [ambulances, setAmbulances] = useState<Ambulance[]>([]);
   const [hospitals, setHospitals] = useState<HospitalOption[]>([]);
@@ -361,13 +365,13 @@ export const LiveFleetRadar: React.FC<LiveFleetRadarProps> = ({
           <div className="flex items-center gap-2">
             <span className="w-2.5 h-2.5 rounded-full bg-emerald-500 animate-ping shrink-0" />
             <h3 className="text-base font-bold text-slate-900 dark:text-white tracking-tight flex items-center gap-2">
-              <span>{title}</span>
+              <span>{displayTitle}</span>
             </h3>
             <span className="text-[10px] uppercase font-bold px-2 py-0.5 rounded bg-emerald-50 dark:bg-emerald-950/50 text-emerald-800 dark:text-emerald-300 border border-emerald-200 dark:border-emerald-800">
               Live GPS Radar
             </span>
           </div>
-          <p className="text-xs text-slate-500 dark:text-slate-400 mt-0.5">{subtitle}</p>
+          <p className="text-xs text-slate-500 dark:text-slate-400 mt-0.5">{displaySubtitle}</p>
         </div>
 
         {/* Action Controls */}
@@ -378,7 +382,7 @@ export const LiveFleetRadar: React.FC<LiveFleetRadarProps> = ({
             className="flex-1 sm:flex-initial px-3 py-1.5 bg-white dark:bg-slate-800 hover:bg-slate-100 text-slate-700 dark:text-slate-200 rounded-lg text-xs font-semibold border border-slate-200 dark:border-slate-700 flex items-center justify-center gap-1.5 shadow-xs transition cursor-pointer"
           >
             <Crosshair className="w-3.5 h-3.5 text-red-600" />
-            <span>Center on Me</span>
+            <span>{t.centerOnMe}</span>
           </button>
 
           <button
@@ -387,7 +391,7 @@ export const LiveFleetRadar: React.FC<LiveFleetRadarProps> = ({
             className="flex-1 sm:flex-initial px-3 py-1.5 bg-white dark:bg-slate-800 hover:bg-slate-100 text-slate-700 dark:text-slate-200 rounded-lg text-xs font-semibold border border-slate-200 dark:border-slate-700 flex items-center justify-center gap-1.5 shadow-xs transition cursor-pointer"
           >
             <Compass className="w-3.5 h-3.5 text-blue-600" />
-            <span>Calibrate GPS</span>
+            <span>{t.gpsCalibrate}</span>
           </button>
 
           <button
@@ -403,29 +407,29 @@ export const LiveFleetRadar: React.FC<LiveFleetRadarProps> = ({
       </div>
 
         {/* Map Container */}
-        <div className="relative">
+        <div className="relative isolate z-0">
           <div ref={mapContainerRef} className={`w-full ${heightClass} bg-slate-100 dark:bg-slate-950`} />
 
           {/* Floating Map Legend Overlay on Top-Right */}
           <div className="absolute top-3 right-3 z-[400] bg-white/95 dark:bg-slate-900/95 backdrop-blur-md rounded-xl p-2.5 border border-slate-200/80 dark:border-slate-700/80 shadow-md text-[11px] space-y-1.5 pointer-events-auto">
             <div className="font-bold text-[10px] uppercase tracking-wider text-slate-500 dark:text-slate-400 border-b border-slate-100 dark:border-slate-800 pb-1">
-              Radar Markers Legend
+              {t.radarMarkersLegend}
             </div>
             <div className="flex items-center gap-2">
               <span className="w-3.5 h-3.5 rounded bg-emerald-600 flex items-center justify-center text-[9px] font-black text-white shrink-0">H</span>
-              <span className="font-semibold text-slate-700 dark:text-slate-200">Ward Available</span>
+              <span className="font-semibold text-slate-700 dark:text-slate-200">{t.wardAvailable}</span>
             </div>
             <div className="flex items-center gap-2">
               <span className="w-3.5 h-3.5 rounded bg-red-600 flex items-center justify-center text-[9px] font-black text-white shrink-0">H</span>
-              <span className="font-semibold text-slate-700 dark:text-slate-200">Ward Full (Diversion)</span>
+              <span className="font-semibold text-slate-700 dark:text-slate-200">{t.wardFullDiversion}</span>
             </div>
             <div className="flex items-center gap-2">
               <span className="w-3.5 h-3.5 rounded bg-amber-500 flex items-center justify-center text-[9px] text-white shrink-0">🚑</span>
-              <span className="text-slate-600 dark:text-slate-300">Ambulance Fleet</span>
+              <span className="text-slate-600 dark:text-slate-300">{t.ambulanceFleet}</span>
             </div>
             <div className="flex items-center gap-2">
               <span className="w-2.5 h-2.5 rounded-full bg-red-600 border border-white shrink-0"></span>
-              <span className="text-slate-600 dark:text-slate-300">Your Incident GPS</span>
+              <span className="text-slate-600 dark:text-slate-300">{t.yourIncidentGps}</span>
             </div>
           </div>
 
@@ -434,26 +438,26 @@ export const LiveFleetRadar: React.FC<LiveFleetRadarProps> = ({
             <div className="flex items-center justify-between gap-2 border-b border-slate-100 dark:border-slate-800 pb-1.5">
               <div className="flex items-center gap-1.5 font-bold text-slate-900 dark:text-white">
                 <MapPin className="w-3.5 h-3.5 text-red-600 shrink-0" />
-                <span className="truncate">Your Detected GPS Pin</span>
+                <span className="truncate">{t.yourDetectedPin}</span>
               </div>
               <span className="text-[10px] font-mono text-emerald-600 dark:text-emerald-400 font-bold">
-                {userCoords ? `±${userCoords.accuracy || 15}m` : 'Detecting...'}
+                {userCoords ? `±${userCoords.accuracy || 15}m` : `${t.loading}`}
               </span>
             </div>
 
             <p className="text-[11px] text-slate-600 dark:text-slate-300 truncate font-medium">
-              {resolvedAddress || (userCoords ? `${userCoords.latitude.toFixed(4)}, ${userCoords.longitude.toFixed(4)}` : 'Acquiring GPS coordinates...')}
+              {resolvedAddress || (userCoords ? `${userCoords.latitude.toFixed(4)}, ${userCoords.longitude.toFixed(4)}` : t.detectingGps)}
             </p>
 
             {nearestAmbulance && (
               <div className="pt-1 flex items-center justify-between text-[11px] text-emerald-700 dark:text-emerald-400 font-semibold">
                 <span className="flex items-center gap-1">
                   <Truck className="w-3.5 h-3.5" />
-                  <span>Unit {nearestAmbulance.amb.vehicle_number}: {nearestAmbulance.dist} km</span>
+                  <span>{t.nearestAmbulance} ({nearestAmbulance.amb.vehicle_number}): {nearestAmbulance.dist} km</span>
                 </span>
                 <span className="flex items-center gap-1 bg-emerald-50 dark:bg-emerald-950/80 px-1.5 py-0.5 rounded border border-emerald-200 dark:border-emerald-800">
                   <Clock className="w-3 h-3" />
-                  <span>~{nearestAmbulance.eta}m ETA</span>
+                  <span>~{nearestAmbulance.eta}m {t.eta}</span>
                 </span>
               </div>
             )}
@@ -465,16 +469,16 @@ export const LiveFleetRadar: React.FC<LiveFleetRadarProps> = ({
           <div className="flex items-center gap-2 sm:gap-3 flex-wrap">
             <span className="font-semibold text-slate-600 dark:text-slate-400 flex items-center gap-1">
               <Activity className="w-3.5 h-3.5 text-emerald-600" />
-              <span>Fleet: <strong className="text-slate-900 dark:text-white font-mono">{ambulances.filter((a) => a.status === 'AVAILABLE').length} Ready</strong></span>
+              <span>{t.ambulanceFleet}: <strong className="text-slate-900 dark:text-white font-mono">{ambulances.filter((a) => a.status === 'AVAILABLE').length} {t.available}</strong></span>
             </span>
             <span className="text-slate-300 dark:text-slate-700">|</span>
             <span className="flex items-center gap-1 text-slate-600 dark:text-slate-300">
-              <span>Emergency Wards:</span>
+              <span>{t.hospitalWards}:</span>
               <strong className="text-emerald-700 dark:text-emerald-400 bg-emerald-50 dark:bg-emerald-950/80 px-1.5 py-0.5 rounded border border-emerald-200 dark:border-emerald-800 font-mono">
-                🟢 {hospitals.filter(h => h.ward_capacity !== 'FULL' && h.emergencyWardCapacity !== 'FULL' && (h.availableEmergencyBeds === undefined || h.availableEmergencyBeds > 0)).length} Avail
+                🟢 {hospitals.filter(h => h.ward_capacity !== 'FULL' && h.emergencyWardCapacity !== 'FULL' && (h.availableEmergencyBeds === undefined || h.availableEmergencyBeds > 0)).length} {t.available}
               </strong>
               <strong className="text-red-700 dark:text-red-400 bg-red-50 dark:bg-red-950/80 px-1.5 py-0.5 rounded border border-red-200 dark:border-red-800 font-mono">
-                🔴 {hospitals.filter(h => h.ward_capacity === 'FULL' || h.emergencyWardCapacity === 'FULL' || h.availableEmergencyBeds === 0).length} Full
+                🔴 {hospitals.filter(h => h.ward_capacity === 'FULL' || h.emergencyWardCapacity === 'FULL' || h.availableEmergencyBeds === 0).length} {t.busy}
               </strong>
             </span>
           </div>
@@ -485,7 +489,7 @@ export const LiveFleetRadar: React.FC<LiveFleetRadarProps> = ({
               onClick={onTriggerSos}
               className="px-3 py-1 bg-red-600 hover:bg-red-700 text-white rounded-lg text-xs font-bold transition flex items-center gap-1.5 shadow-xs cursor-pointer"
             >
-              <span>1-Tap SOS Dispatch</span>
+              <span>{t.instant1TapSos}</span>
             </button>
           )}
         </div>

@@ -14,6 +14,7 @@ import {
   Copy
 } from 'lucide-react';
 import { User as UserType } from '../types';
+import { useLanguage } from '../context/LanguageContext';
 
 interface EmergencyHealthPassModalProps {
   isOpen: boolean;
@@ -28,6 +29,7 @@ export const EmergencyHealthPassModal: React.FC<EmergencyHealthPassModalProps> =
   currentUser,
   showToast,
 }) => {
+  const { t } = useLanguage();
   const [copied, setCopied] = useState(false);
 
   if (!isOpen || !currentUser) return null;
@@ -230,7 +232,7 @@ export const EmergencyHealthPassModal: React.FC<EmergencyHealthPassModalProps> =
               className="flex items-center gap-1.5 px-3 py-2 text-xs font-semibold text-gray-700 bg-gray-100 hover:bg-gray-200 rounded-xl transition-colors"
             >
               {copied ? <CheckCircle className="w-4 h-4 text-emerald-600" /> : <Copy className="w-4 h-4" />}
-              {copied ? 'Link Copied!' : 'Copy Emergency URL'}
+              {copied ? (t.linkCopied || 'Link Copied!') : (t.copyEmergencyUrl || 'Copy Emergency URL')}
             </button>
 
             <div className="flex items-center gap-2">
@@ -239,7 +241,7 @@ export const EmergencyHealthPassModal: React.FC<EmergencyHealthPassModalProps> =
                 className="flex items-center gap-1.5 px-4 py-2 text-xs font-bold text-white bg-red-600 hover:bg-red-700 rounded-xl shadow-sm transition-all"
               >
                 <Download className="w-4 h-4" />
-                Print / Save ICE Pass
+                {t.printSaveIcePass || 'Print / Save ICE Pass'}
               </button>
             </div>
           </div>

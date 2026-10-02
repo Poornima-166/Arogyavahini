@@ -148,7 +148,175 @@ export const DriverDashboardView: React.FC<DriverDashboardViewProps> = ({
         )}
       </div>
 
-      {/* 2. FOUR COMPACT SUMMARY CARDS */}
+      {/* 2. EMERGENCY OPERATIONS FIRST: ACTIVE EMERGENCY IN PROGRESS */}
+      {activeMission && (
+        <div
+          id="driver-dashboard-active-emergency-banner"
+          className="bg-linear-to-r from-red-600 to-rose-700 text-white rounded-2xl p-6 shadow-lg space-y-4 animate-in fade-in duration-200"
+        >
+          <div className="flex flex-col sm:flex-row items-start sm:items-center justify-between gap-3">
+            <div className="flex items-center gap-3">
+              <div className="w-12 h-12 rounded-xl bg-white text-red-600 flex items-center justify-center font-black shadow-md shrink-0 animate-bounce">
+                <Radio className="w-6 h-6" />
+              </div>
+              <div>
+                <span className="text-[10px] font-black uppercase tracking-widest px-2 py-0.5 rounded bg-red-950/80 text-amber-300 border border-red-400/40">
+                  🚨 ACTIVE EMERGENCY IN PROGRESS
+                </span>
+                <h2 className="text-xl sm:text-2xl font-black mt-1">
+                  {activeMission.emergency_type}
+                </h2>
+              </div>
+            </div>
+
+            <span className="px-3 py-1 rounded-full bg-white/20 font-mono text-xs font-black uppercase backdrop-blur-xs">
+              STATUS: {activeMission.status.replace(/_/g, ' ')}
+            </span>
+          </div>
+
+          <div className="grid grid-cols-1 sm:grid-cols-2 md:grid-cols-4 gap-3 text-xs bg-black/20 p-4 rounded-xl backdrop-blur-xs border border-white/10">
+            <div>
+              <span className="text-white/70 text-[10px] uppercase font-bold block">Patient</span>
+              <span className="font-bold text-white text-sm">{activeMission.patient_name}</span>
+            </div>
+            <div>
+              <span className="text-white/70 text-[10px] uppercase font-bold block">Destination</span>
+              <span className="font-bold text-white truncate block">
+                {activeMission.hospital_destination || activeMission.location}
+              </span>
+            </div>
+            <div>
+              <span className="text-white/70 text-[10px] uppercase font-bold block">Estimated ETA</span>
+              <span className="font-bold text-white text-sm">
+                {activeMission.current_eta_minutes ? `${activeMission.current_eta_minutes} mins` : 'Calculating...'}
+              </span>
+            </div>
+            <div>
+              <span className="text-white/70 text-[10px] uppercase font-bold block">Phone</span>
+              <a href={`tel:${activeMission.phone}`} className="font-bold font-mono text-amber-200 hover:underline">
+                {activeMission.phone}
+              </a>
+            </div>
+          </div>
+
+          <div className="flex flex-wrap items-center gap-3 pt-2">
+            <button
+              type="button"
+              onClick={() => onSelectTab('active')}
+              className="px-5 py-3 rounded-xl bg-white text-red-700 hover:bg-slate-100 font-extrabold text-sm shadow-md transition-all cursor-pointer flex items-center gap-2"
+            >
+              <span>OPEN ACTIVE EMERGENCY</span>
+              <ArrowRight className="w-4 h-4" />
+            </button>
+
+            <button
+              type="button"
+              onClick={() => onSelectTab('navigation')}
+              className="px-4 py-3 rounded-xl bg-red-900/60 hover:bg-red-900/80 text-white font-bold text-sm border border-red-400/40 transition cursor-pointer flex items-center gap-2"
+            >
+              <Navigation className="w-4 h-4" />
+              <span>Open Live Route Navigation</span>
+            </button>
+          </div>
+        </div>
+      )}
+
+      {/* 3. INCOMING EMERGENCY ALERT (IF NO ACTIVE MISSION AND REQUESTS EXIST) */}
+      {!activeMission && topIncoming && (
+        <div id="driver-dashboard-incoming-section" className="space-y-3">
+          <div className="flex items-center justify-between">
+            <h3 className="text-sm font-bold uppercase tracking-wider text-slate-900 dark:text-white flex items-center gap-2">
+              <span>🚨 Incoming Emergency Call</span>
+              <span className="px-2 py-0.5 rounded-full bg-red-600 text-white text-[10px] font-black animate-pulse">
+                Action Required
+              </span>
+            </h3>
+
+            {incomingRequests.length > 1 && (
+              <button
+                type="button"
+                onClick={() => onSelectTab('incoming')}
+                className="text-xs font-bold text-amber-600 dark:text-amber-400 hover:underline cursor-pointer"
+              >
+                View all ({incomingRequests.length})
+              </button>
+            )}
+          </div>
+
+          <div className="bg-white dark:bg-slate-900 rounded-2xl border-2 border-red-500 p-6 shadow-md space-y-4 animate-in fade-in">
+            <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3">
+              <div className="flex items-center gap-3">
+                <div className="w-10 h-10 rounded-xl bg-red-600 text-white flex items-center justify-center font-black animate-pulse shrink-0">
+                  <AlertTriangle className="w-5 h-5" />
+                </div>
+                <div>
+                  <div className="flex items-center gap-2">
+                    <span className="px-2 py-0.5 rounded bg-red-600 text-white text-[10px] font-black uppercase">
+                      {topIncomingPriority} PRIORITY
+                    </span>
+                    <span className="text-xs text-slate-400 font-mono flex items-center gap-1">
+                      <Clock className="w-3 h-3" />
+                      {formatTimeAgo(topIncoming.created_at)}
+                    </span>
+                  </div>
+                  <h4 className="text-lg font-black text-slate-900 dark:text-white mt-1">
+                    🚨 {topIncoming.emergency_type}
+                  </h4>
+                </div>
+              </div>
+
+              <div className="text-right sm:block">
+                <span className="text-[10px] uppercase font-bold text-slate-400 block">Distance</span>
+                <span className="text-base font-black font-mono text-slate-900 dark:text-white">
+                  {topIncomingDist !== null ? `${topIncomingDist} km` : 'Proximity nearby'}
+                </span>
+              </div>
+            </div>
+
+            <div className="grid grid-cols-1 sm:grid-cols-3 gap-3 bg-slate-50 dark:bg-slate-800/60 p-3.5 rounded-xl border border-slate-200 dark:border-slate-700 text-xs">
+              <div>
+                <span className="text-slate-400 text-[10px] uppercase font-bold block">Patient</span>
+                <span className="font-bold text-slate-900 dark:text-white">{topIncoming.patient_name}</span>
+              </div>
+              <div className="sm:col-span-2">
+                <span className="text-slate-400 text-[10px] uppercase font-bold block">Incident Location</span>
+                <span className="font-bold text-slate-900 dark:text-white flex items-center gap-1">
+                  <MapPin className="w-3.5 h-3.5 text-red-600 shrink-0" />
+                  <span className="truncate">{topIncoming.location}</span>
+                </span>
+              </div>
+            </div>
+
+            {topIncoming.notes && (
+              <p className="text-xs text-slate-600 dark:text-slate-300 bg-amber-50/50 dark:bg-amber-950/30 p-2.5 rounded-lg border border-amber-200/50 dark:border-amber-900/40">
+                <span className="font-bold text-slate-800 dark:text-slate-200">Patient Note: </span>
+                {topIncoming.notes}
+              </p>
+            )}
+
+            <div className="flex flex-wrap items-center gap-3 pt-1">
+              <button
+                type="button"
+                onClick={() => onAcceptEmergency(topIncoming.id)}
+                disabled={isAcceptingId === topIncoming.id}
+                className="px-6 py-2.5 rounded-xl bg-red-600 hover:bg-red-700 text-white font-extrabold text-xs shadow-md transition-all cursor-pointer flex items-center gap-2"
+              >
+                <Check className="w-4 h-4" />
+                <span>{isAcceptingId === topIncoming.id ? 'ACCEPTING DISPATCH...' : 'ACCEPT EMERGENCY DISPATCH'}</span>
+              </button>
+              <button
+                type="button"
+                onClick={() => onSelectTab('incoming')}
+                className="px-4 py-2.5 rounded-xl bg-slate-100 dark:bg-slate-800 text-slate-700 dark:text-slate-300 font-bold text-xs hover:bg-slate-200 transition cursor-pointer"
+              >
+                Review Full Details
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* 4. FOUR COMPACT SUMMARY CARDS */}
       <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4">
         {/* Card 1: Current Status */}
         <div className="bg-white dark:bg-slate-900 rounded-2xl p-5 border border-slate-200 dark:border-slate-800 shadow-xs flex flex-col justify-between space-y-3">
@@ -301,189 +469,20 @@ export const DriverDashboardView: React.FC<DriverDashboardViewProps> = ({
         </div>
       </div>
 
-      {/* 3. CONDITIONAL HIGHLIGHT: ACTIVE EMERGENCY (IF ANY) */}
-      {activeMission ? (
-        <div
-          id="driver-dashboard-active-emergency-banner"
-          className="bg-linear-to-r from-red-600 to-rose-700 text-white rounded-2xl p-6 shadow-lg space-y-4"
-        >
-          <div className="flex flex-col sm:flex-row items-start sm:items-center justify-between gap-3">
-            <div className="flex items-center gap-3">
-              <div className="w-12 h-12 rounded-xl bg-white text-red-600 flex items-center justify-center font-black shadow-md shrink-0 animate-bounce">
-                <Radio className="w-6 h-6" />
-              </div>
-              <div>
-                <span className="text-[10px] font-black uppercase tracking-widest px-2 py-0.5 rounded bg-red-950/80 text-amber-300 border border-red-400/40">
-                  🚨 ACTIVE EMERGENCY IN PROGRESS
-                </span>
-                <h2 className="text-xl sm:text-2xl font-black mt-1">
-                  {activeMission.emergency_type}
-                </h2>
-              </div>
-            </div>
-
-            <span className="px-3 py-1 rounded-full bg-white/20 font-mono text-xs font-black uppercase backdrop-blur-xs">
-              STATUS: {activeMission.status.replace(/_/g, ' ')}
-            </span>
+      {/* Standby Readiness Status when no active or incoming emergency */}
+      {!activeMission && !topIncoming && (
+        <div className="bg-slate-50 dark:bg-slate-900 rounded-2xl p-8 border border-slate-200 dark:border-slate-800 text-center space-y-3">
+          <div className="w-12 h-12 rounded-full bg-emerald-100 dark:bg-emerald-950/80 text-emerald-600 dark:text-emerald-400 flex items-center justify-center mx-auto shadow-xs">
+            <CheckCircle2 className="w-6 h-6" />
           </div>
-
-          <div className="grid grid-cols-1 sm:grid-cols-2 md:grid-cols-4 gap-3 text-xs bg-black/20 p-4 rounded-xl backdrop-blur-xs border border-white/10">
-            <div>
-              <span className="text-white/70 text-[10px] uppercase font-bold block">Patient</span>
-              <span className="font-bold text-white text-sm">{activeMission.patient_name}</span>
-            </div>
-            <div>
-              <span className="text-white/70 text-[10px] uppercase font-bold block">Destination</span>
-              <span className="font-bold text-white truncate block">
-                {activeMission.hospital_destination || activeMission.location}
-              </span>
-            </div>
-            <div>
-              <span className="text-white/70 text-[10px] uppercase font-bold block">Estimated ETA</span>
-              <span className="font-bold text-white text-sm">
-                {activeMission.current_eta_minutes ? `${activeMission.current_eta_minutes} mins` : 'Calculating...'}
-              </span>
-            </div>
-            <div>
-              <span className="text-white/70 text-[10px] uppercase font-bold block">Phone</span>
-              <a href={`tel:${activeMission.phone}`} className="font-bold font-mono text-amber-200 hover:underline">
-                {activeMission.phone}
-              </a>
-            </div>
+          <div className="space-y-1">
+            <h4 className="text-base font-bold text-slate-900 dark:text-white">
+              No active emergency dispatches
+            </h4>
+            <p className="text-xs text-slate-500 dark:text-slate-400 max-w-md mx-auto">
+              Your unit is online in the regional fleet pool. The AI CAD system will sound an alarm and alert your cockpit as soon as a 108 incident is routed to you.
+            </p>
           </div>
-
-          <div className="flex flex-wrap items-center gap-3 pt-2">
-            <button
-              type="button"
-              onClick={() => onSelectTab('active')}
-              className="px-5 py-3 rounded-xl bg-white text-red-700 hover:bg-slate-100 font-extrabold text-sm shadow-md transition-all cursor-pointer flex items-center gap-2"
-            >
-              <span>OPEN ACTIVE EMERGENCY</span>
-              <ArrowRight className="w-4 h-4" />
-            </button>
-
-            <button
-              type="button"
-              onClick={() => onSelectTab('navigation')}
-              className="px-4 py-3 rounded-xl bg-red-900/60 hover:bg-red-900/80 text-white font-bold text-sm border border-red-400/40 transition cursor-pointer flex items-center gap-2"
-            >
-              <Navigation className="w-4 h-4" />
-              <span>Open Live Route Navigation</span>
-            </button>
-          </div>
-        </div>
-      ) : (
-        /* 4. INCOMING EMERGENCY CARD (IF ANY) */
-        <div id="driver-dashboard-incoming-section" className="space-y-3">
-          <div className="flex items-center justify-between">
-            <h3 className="text-sm font-bold uppercase tracking-wider text-slate-900 dark:text-white flex items-center gap-2">
-              <span>Incoming Emergency Alert</span>
-              {incomingRequests.length > 0 && (
-                <span className="px-2 py-0.5 rounded-full bg-red-600 text-white text-[10px] font-black animate-pulse">
-                  {incomingRequests.length} in queue
-                </span>
-              )}
-            </h3>
-
-            {incomingRequests.length > 1 && (
-              <button
-                type="button"
-                onClick={() => onSelectTab('incoming')}
-                className="text-xs font-bold text-amber-600 dark:text-amber-400 hover:underline cursor-pointer"
-              >
-                View all ({incomingRequests.length})
-              </button>
-            )}
-          </div>
-
-          {topIncoming ? (
-            <div className="bg-white dark:bg-slate-900 rounded-2xl border-2 border-red-500 p-6 shadow-md space-y-4 animate-in fade-in">
-              <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3">
-                <div className="flex items-center gap-3">
-                  <div className="w-10 h-10 rounded-xl bg-red-600 text-white flex items-center justify-center font-black animate-pulse shrink-0">
-                    <AlertTriangle className="w-5 h-5" />
-                  </div>
-                  <div>
-                    <div className="flex items-center gap-2">
-                      <span className="px-2 py-0.5 rounded bg-red-600 text-white text-[10px] font-black uppercase">
-                        {topIncomingPriority} PRIORITY
-                      </span>
-                      <span className="text-xs text-slate-400 font-mono flex items-center gap-1">
-                        <Clock className="w-3 h-3" />
-                        {formatTimeAgo(topIncoming.created_at)}
-                      </span>
-                    </div>
-                    <h4 className="text-lg font-black text-slate-900 dark:text-white mt-1">
-                      🚨 {topIncoming.emergency_type}
-                    </h4>
-                  </div>
-                </div>
-
-                <div className="text-right sm:block">
-                  <span className="text-[10px] uppercase font-bold text-slate-400 block">Distance</span>
-                  <span className="text-base font-black font-mono text-slate-900 dark:text-white">
-                    {topIncomingDist !== null ? `${topIncomingDist} km` : 'Proximity nearby'}
-                  </span>
-                </div>
-              </div>
-
-              <div className="grid grid-cols-1 sm:grid-cols-3 gap-3 bg-slate-50 dark:bg-slate-800/60 p-3.5 rounded-xl border border-slate-200 dark:border-slate-700 text-xs">
-                <div>
-                  <span className="text-slate-400 text-[10px] uppercase font-bold block">Patient</span>
-                  <span className="font-bold text-slate-900 dark:text-white">{topIncoming.patient_name}</span>
-                </div>
-                <div className="sm:col-span-2">
-                  <span className="text-slate-400 text-[10px] uppercase font-bold block">Incident Location</span>
-                  <span className="font-bold text-slate-900 dark:text-white flex items-center gap-1">
-                    <MapPin className="w-3.5 h-3.5 text-red-600 shrink-0" />
-                    <span className="truncate">{topIncoming.location}</span>
-                  </span>
-                </div>
-              </div>
-
-              {topIncoming.notes && (
-                <p className="text-xs text-slate-600 dark:text-slate-300 bg-amber-50/50 dark:bg-amber-950/30 p-2.5 rounded-lg border border-amber-200/50 dark:border-amber-900/40">
-                  <span className="font-bold text-slate-800 dark:text-slate-200">Patient Note: </span>
-                  {topIncoming.notes}
-                </p>
-              )}
-
-              <div className="flex flex-wrap items-center gap-3 pt-1">
-                <button
-                  type="button"
-                  onClick={() => onAcceptEmergency(topIncoming.id)}
-                  disabled={isAcceptingId === topIncoming.id}
-                  className="flex-1 min-w-[140px] py-3 bg-emerald-600 hover:bg-emerald-700 disabled:bg-emerald-400 text-white font-black text-sm rounded-xl shadow-xs flex items-center justify-center gap-2 transition cursor-pointer"
-                >
-                  <CheckCircle2 className="w-5 h-5" />
-                  <span>{isAcceptingId === topIncoming.id ? 'Accepting...' : 'ACCEPT EMERGENCY'}</span>
-                </button>
-
-                <button
-                  type="button"
-                  onClick={() => onSelectTab('incoming')}
-                  className="px-5 py-3 bg-slate-100 dark:bg-slate-800 hover:bg-slate-200 dark:hover:bg-slate-700 text-slate-800 dark:text-slate-200 font-bold text-sm rounded-xl transition cursor-pointer"
-                >
-                  VIEW EMERGENCY DETAILS
-                </button>
-              </div>
-            </div>
-          ) : (
-            /* No active emergency and no incoming requests */
-            <div className="bg-slate-50 dark:bg-slate-900 rounded-2xl p-8 border border-slate-200 dark:border-slate-800 text-center space-y-3">
-              <div className="w-12 h-12 rounded-full bg-emerald-100 dark:bg-emerald-950/80 text-emerald-600 dark:text-emerald-400 flex items-center justify-center mx-auto">
-                <CheckCircle2 className="w-6 h-6" />
-              </div>
-              <div className="space-y-1">
-                <h4 className="text-base font-bold text-slate-900 dark:text-white">
-                  No active emergency requests
-                </h4>
-                <p className="text-xs text-slate-500 dark:text-slate-400 max-w-md mx-auto">
-                  Your ambulance is ready for dispatch. Our AI dispatch system monitors regional 108 emergency calls and will alert your cockpit automatically.
-                </p>
-              </div>
-            </div>
-          )}
         </div>
       )}
     </div>

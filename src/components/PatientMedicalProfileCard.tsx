@@ -23,6 +23,7 @@ import {
 import { User } from '../types';
 import { api } from '../services/api';
 import { useAuth } from '../context/AuthContext';
+import { useLanguage } from '../context/LanguageContext';
 
 interface PatientMedicalProfileCardProps {
   user: User | null;
@@ -70,6 +71,7 @@ export const PatientMedicalProfileCard: React.FC<PatientMedicalProfileCardProps>
   onProfileUpdated,
 }) => {
   const { updateUser, showToast } = useAuth();
+  const { t } = useLanguage();
 
   const [isEditingInline, setIsEditingInline] = useState(false);
   const [bloodType, setBloodType] = useState(user?.blood_type || 'B+');
@@ -211,13 +213,13 @@ export const PatientMedicalProfileCard: React.FC<PatientMedicalProfileCardProps>
           <div>
             <div className="flex items-center gap-2">
               <h3 className="text-xs sm:text-sm font-black text-slate-900 dark:text-white uppercase tracking-wider flex items-center gap-1.5">
-                <span>Secure Emergency Medical Profile</span>
+                <span>{t.secureMedicalProfile || 'Secure Emergency Medical Profile'}</span>
                 <span className="text-[10px] text-red-600 dark:text-red-400 font-semibold">(108 SOS Triage)</span>
               </h3>
             </div>
             <p className="text-[11px] text-slate-500 dark:text-slate-400 flex items-center gap-1.5 mt-0.5">
               <Lock className="w-3 h-3 text-emerald-600 dark:text-emerald-400" />
-              <span>256-Bit Encrypted Healthcare Record • Shared directly with dispatched ambulance crew upon SOS</span>
+              <span>{t.secureMedicalProfileDesc || '256-Bit Encrypted Healthcare Record • Shared directly with dispatched ambulance crew upon SOS'}</span>
             </p>
           </div>
         </div>
@@ -226,7 +228,7 @@ export const PatientMedicalProfileCard: React.FC<PatientMedicalProfileCardProps>
           {/* Transmitted On SOS Badge */}
           <span className="hidden sm:inline-flex items-center gap-1 text-[11px] font-bold px-2.5 py-1 rounded-full bg-emerald-100 dark:bg-emerald-950/80 text-emerald-800 dark:text-emerald-300 border border-emerald-300 dark:border-emerald-800">
             <Shield className="w-3 h-3" />
-            <span>Transmitted on SOS</span>
+            <span>{t.transmittedOnSos || 'Transmitted on SOS'}</span>
           </span>
 
           {/* Inline Edit Toggle */}
@@ -243,12 +245,12 @@ export const PatientMedicalProfileCard: React.FC<PatientMedicalProfileCardProps>
             {isEditingInline ? (
               <>
                 <ChevronUp className="w-3.5 h-3.5" />
-                <span>Close Editor</span>
+                <span>{t.close || 'Close Editor'}</span>
               </>
             ) : (
               <>
                 <Edit3 className="w-3.5 h-3.5" />
-                <span>Input / Edit Medical Info</span>
+                <span>{t.inputEditMedicalInfo || 'Input / Edit Medical Info'}</span>
               </>
             )}
           </button>
@@ -462,10 +464,10 @@ export const PatientMedicalProfileCard: React.FC<PatientMedicalProfileCardProps>
           </div>
           <div className="min-w-0 flex-1">
             <span className="text-[10px] uppercase font-bold text-slate-400 block tracking-wider">
-              Blood Group
+              {t.bloodGroup || 'Blood Group'}
             </span>
             <span className="text-sm font-black text-slate-900 dark:text-slate-100 block">
-              Type {bloodType || 'B+'}
+              {bloodType || 'B+'}
             </span>
             <span className="text-[10px] text-emerald-600 dark:text-emerald-400 font-semibold flex items-center gap-0.5 mt-0.5">
               <CheckCircle2 className="w-2.5 h-2.5" /> Transfusion Ready
@@ -480,10 +482,10 @@ export const PatientMedicalProfileCard: React.FC<PatientMedicalProfileCardProps>
           </div>
           <div className="min-w-0 flex-1">
             <span className="text-[10px] uppercase font-bold text-amber-700 dark:text-amber-400 block tracking-wider">
-              Known Allergies
+              {t.allergies || 'Known Allergies'}
             </span>
             <p className="text-xs font-bold text-slate-900 dark:text-slate-100 truncate mt-0.5" title={allergies}>
-              {allergies || 'No known allergies reported'}
+              {allergies || (t.noKnownAllergies || 'No known allergies reported')}
             </p>
             <span className="text-[10px] text-slate-500 dark:text-slate-400 block mt-0.5">
               Alerts 108 Paramedics
@@ -498,7 +500,7 @@ export const PatientMedicalProfileCard: React.FC<PatientMedicalProfileCardProps>
           </div>
           <div className="min-w-0 flex-1">
             <span className="text-[10px] uppercase font-bold text-blue-700 dark:text-blue-400 block tracking-wider">
-              Emergency Contact
+              {t.emergencyContact || 'Emergency Contact'}
             </span>
             <p className="text-xs font-bold text-slate-900 dark:text-slate-100 truncate mt-0.5">
               {contactName || 'Rajesh Rao'} {contactRelation ? `(${contactRelation})` : ''}
@@ -513,7 +515,7 @@ export const PatientMedicalProfileCard: React.FC<PatientMedicalProfileCardProps>
                 <span>{contactPhone}</span>
               </a>
             ) : (
-              <span className="text-[10px] text-slate-400">Not provided</span>
+              <span className="text-[10px] text-slate-400">{t.notSet || 'Not provided'}</span>
             )}
           </div>
         </div>
@@ -525,10 +527,10 @@ export const PatientMedicalProfileCard: React.FC<PatientMedicalProfileCardProps>
           </div>
           <div className="min-w-0 flex-1">
             <span className="text-[10px] uppercase font-bold text-slate-400 block tracking-wider">
-              Conditions & Notes
+              {t.chronicConditions || 'Conditions & Notes'}
             </span>
             <p className="text-xs font-semibold text-slate-800 dark:text-slate-200 truncate mt-0.5" title={medicalNotes}>
-              {medicalNotes || 'No chronic conditions noted.'}
+              {medicalNotes || (t.noRecordedConditions || 'No chronic conditions noted.')}
             </p>
             <span className="text-[10px] text-slate-500 dark:text-slate-400 block mt-0.5">
               Pre-hospital Triage Guide
@@ -542,7 +544,7 @@ export const PatientMedicalProfileCard: React.FC<PatientMedicalProfileCardProps>
         <div className="flex items-center gap-2">
           <Shield className="w-3.5 h-3.5 text-red-600 dark:text-red-400 shrink-0" />
           <span>
-            <strong>SOS Responder Guarantee:</strong> When you press SOS, the assigned ambulance driver, EMT paramedic, and destination trauma ER automatically receive this exact medical profile.
+            <strong>{t.sosResponderGuarantee || 'SOS Responder Guarantee:'}</strong> {t.sosResponderGuaranteeDesc || 'When you press SOS, the assigned ambulance driver, EMT paramedic, and destination trauma ER automatically receive this exact medical profile.'}
           </span>
         </div>
         <span className="hidden md:inline font-mono text-[10px] text-slate-400">

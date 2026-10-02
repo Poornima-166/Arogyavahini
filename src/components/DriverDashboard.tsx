@@ -28,6 +28,7 @@ export const DriverDashboard: React.FC = () => {
 
   // Navigation tab state
   const [activeTab, setActiveTab] = useState<DriverTab>('dashboard');
+  const [isCollapsed, setIsCollapsed] = useState(false);
   const [isMobileSidebarOpen, setIsMobileSidebarOpen] = useState(false);
 
   // Ambulance and mission states
@@ -531,16 +532,16 @@ export const DriverDashboard: React.FC = () => {
   }).length;
 
   return (
-    <div id="driver-portal-root" className="min-h-screen bg-slate-100 dark:bg-slate-950 text-slate-900 dark:text-slate-100 flex flex-col md:flex-row">
+    <div id="driver-portal-root" className="min-h-[calc(100vh-4rem)] bg-slate-100 dark:bg-slate-950 text-slate-900 dark:text-slate-100 flex flex-col md:flex-row w-full">
       {/* MOBILE TOPBAR WITH MENU TRIGGER */}
-      <div className="md:hidden bg-white dark:bg-slate-900 border-b border-slate-200 dark:border-slate-800 p-3 flex items-center justify-between sticky top-0 z-30 shadow-xs">
+      <div className="md:hidden bg-white dark:bg-slate-900 border-b border-slate-200 dark:border-slate-800 p-3 flex items-center justify-between sticky top-16 z-30 shadow-xs">
         <button
           type="button"
           onClick={() => setIsMobileSidebarOpen(!isMobileSidebarOpen)}
           className="p-2 rounded-xl bg-slate-100 dark:bg-slate-800 text-slate-700 dark:text-slate-200 font-bold flex items-center gap-2 cursor-pointer"
         >
           {isMobileSidebarOpen ? <X className="w-5 h-5" /> : <Menu className="w-5 h-5" />}
-          <span className="text-xs">Menu</span>
+          <span className="text-xs">Driver Menu</span>
         </button>
 
         <div className="flex items-center gap-2">
@@ -570,19 +571,32 @@ export const DriverDashboard: React.FC = () => {
         </div>
       </div>
 
+      {/* MOBILE BACKDROP OVERLAY */}
+      {isMobileSidebarOpen && (
+        <div 
+          onClick={() => setIsMobileSidebarOpen(false)}
+          className="md:hidden fixed inset-0 bg-slate-950/60 backdrop-blur-xs z-30 top-16"
+        />
+      )}
+
       {/* FIXED/COLLAPSIBLE ROLE-BASED SIDEBAR */}
-      <div className={`${isMobileSidebarOpen ? 'block' : 'hidden'} md:block fixed md:sticky top-0 left-0 h-screen z-40`}>
+      <div className={`${isMobileSidebarOpen ? 'block' : 'hidden'} md:block fixed md:sticky top-16 left-0 h-[calc(100vh-4rem)] z-30`}>
         <DriverSidebar
           activeTab={activeTab}
           onSelectTab={(tab) => {
             setActiveTab(tab);
             setIsMobileSidebarOpen(false);
           }}
+          isCollapsed={isCollapsed}
+          onToggleCollapse={() => setIsCollapsed(!isCollapsed)}
           incomingCount={incomingRequests.length}
+          hasActiveEmergency={Boolean(activeMission)}
+          activeMission={activeMission}
           activeEmergencyId={activeMission?.id}
+          selectedAmbulance={selectedAmbulance}
+          selectedAmbulanceNumber={selectedAmbulance?.vehicle_number}
           unreadNotificationsCount={unreadCount}
           onLogout={logout}
-          selectedAmbulanceNumber={selectedAmbulance?.vehicle_number}
         />
       </div>
 

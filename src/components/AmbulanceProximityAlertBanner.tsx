@@ -99,7 +99,11 @@ export const AmbulanceProximityAlertBanner: React.FC<AmbulanceProximityAlertBann
             title="Listen to the spoken voice proximity alert"
           >
             <Volume2 className="w-4 h-4 text-amber-500" />
-            <span>{isAudioSpeaking ? 'Announcing...' : 'Hear Voice Alert'}</span>
+            <span>
+              {isAudioSpeaking
+                ? (language === 'kn' ? 'ಪ್ರಕಟಿಸಲಾಗುತ್ತಿದೆ...' : language === 'hi' ? 'घोषणा हो रही है...' : 'Announcing...')
+                : (language === 'kn' ? 'ಧ್ವನಿ ಎಚ್ಚರಿಕೆ ಕೇಳಿ' : language === 'hi' ? 'वॉइस अलर्ट सुनें' : 'Hear Voice Alert')}
+            </span>
           </button>
 
           {emergency.driver_phone && (
@@ -110,7 +114,7 @@ export const AmbulanceProximityAlertBanner: React.FC<AmbulanceProximityAlertBann
               title="Call driver directly"
             >
               <PhoneCall className="w-3.5 h-3.5" />
-              <span>Call Driver</span>
+              <span>{language === 'kn' ? 'ಚಾಲಕರಿಗೆ ಕರೆ ಮಾಡಿ' : language === 'hi' ? 'चालक को कॉल करें' : 'Call Driver'}</span>
             </a>
           )}
 
@@ -132,10 +136,10 @@ export const AmbulanceProximityAlertBanner: React.FC<AmbulanceProximityAlertBann
         <div className="p-2.5 rounded-xl bg-white/80 dark:bg-slate-900/80 border border-amber-500/30 flex items-center justify-between">
           <span className="text-slate-500 dark:text-slate-400 font-medium flex items-center gap-1.5">
             <Navigation className="w-3.5 h-3.5 text-blue-500" />
-            GPS Distance:
+            {language === 'kn' ? 'ಉಳಿದ ದೂರ:' : language === 'hi' ? 'दूरी:' : 'GPS Distance:'}
           </span>
           <span className="text-sm font-black text-slate-900 dark:text-white">
-            {distanceKm.toFixed(1)} km
+            {distanceKm.toFixed(1)} {language === 'kn' ? 'ಕಿ.ಮೀ' : language === 'hi' ? 'किमी' : 'km'}
           </span>
         </div>
 
@@ -143,10 +147,10 @@ export const AmbulanceProximityAlertBanner: React.FC<AmbulanceProximityAlertBann
         <div className="p-2.5 rounded-xl bg-white/80 dark:bg-slate-900/80 border border-amber-500/30 flex items-center justify-between">
           <span className="text-slate-500 dark:text-slate-400 font-medium flex items-center gap-1.5">
             <Clock className="w-3.5 h-3.5 text-amber-500" />
-            Estimated Arrival:
+            {language === 'kn' ? 'ಅಂದಾಜು ಸಮಯ:' : language === 'hi' ? 'अनुमानित समय:' : 'Estimated Arrival:'}
           </span>
           <span className="text-sm font-black text-amber-600 dark:text-amber-400">
-            ~{etaMinutes} Mins
+            ~{etaMinutes} {language === 'kn' ? 'ನಿಮಿಷ' : language === 'hi' ? 'मिनट' : 'Mins'}
           </span>
         </div>
 
@@ -154,10 +158,10 @@ export const AmbulanceProximityAlertBanner: React.FC<AmbulanceProximityAlertBann
         <div className="p-2.5 rounded-xl bg-white/80 dark:bg-slate-900/80 border border-amber-500/30 flex items-center justify-between">
           <span className="text-slate-500 dark:text-slate-400 font-medium flex items-center gap-1.5">
             <ShieldCheck className="w-3.5 h-3.5 text-emerald-500" />
-            Priority Signal:
+            {language === 'kn' ? 'ಟ್ರಾಫಿಕ್ ಆದ್ಯತೆ:' : language === 'hi' ? 'ट्रैफिक प्राथमिकता:' : 'Priority Signal:'}
           </span>
           <span className="text-xs font-bold text-emerald-600 dark:text-emerald-400">
-            Green Corridor Active
+            {language === 'kn' ? 'ಗ್ರೀನ್ ಕಾರಿಡಾರ್ ಸಕ್ರಿಯ' : language === 'hi' ? 'ग्रीन कॉरिडोर सक्रिय' : 'Green Corridor Active'}
           </span>
         </div>
       </div>
@@ -165,20 +169,20 @@ export const AmbulanceProximityAlertBanner: React.FC<AmbulanceProximityAlertBann
       {/* Patient Pre-Arrival Action Checklist */}
       <div className="mt-3 p-3 rounded-xl bg-amber-500/10 dark:bg-amber-950/30 border border-amber-500/20 text-[11px] text-slate-700 dark:text-slate-200">
         <span className="font-bold block text-amber-800 dark:text-amber-300 mb-1">
-          ✓ Recommended Pre-Arrival Steps (Within 2 km):
+          {language === 'kn' ? '✓ ಆಂಬ್ಯುಲೆನ್ಸ್ ಬರುವ ಮುನ್ನ ಶಿಫಾರಸು ಮಾಡಿದ ಹಂತಗಳು:' : language === 'hi' ? '✓ एम्बुलेंस आगमन से पूर्व अनुशंसित कदम:' : '✓ Recommended Pre-Arrival Steps (Within 2 km):'}
         </span>
         <div className="grid grid-cols-1 sm:grid-cols-3 gap-2">
           <div className="flex items-center gap-1.5">
             <CheckCircle2 className="w-3.5 h-3.5 text-emerald-500 shrink-0" />
-            <span>Unlock front door/gate & turn on outside lights</span>
+            <span>{language === 'kn' ? 'ಮುಖ್ಯ ಬಾಗಿಲು/ಗೇಟ್ ತೆರೆದಿಡಿ ಮತ್ತು ಬೆಳಕು ಆನ್ ಮಾಡಿ' : language === 'hi' ? 'मुख्य दरवाजा/गेट खोलें और बाहर की लाइट जलाएं' : 'Unlock front door/gate & turn on outside lights'}</span>
           </div>
           <div className="flex items-center gap-1.5">
             <CheckCircle2 className="w-3.5 h-3.5 text-emerald-500 shrink-0" />
-            <span>Keep your phone ready for the driver's call</span>
+            <span>{language === 'kn' ? 'ಚಾಲಕರ ಕರೆಗಾಗಿ ದೂರವಾಣಿ ಸಿದ್ಧವಾಗಿಡಿ' : language === 'hi' ? 'चालक के फ़ोन के लिए अपना मोबाइल तैयार रखें' : "Keep your phone ready for the driver's call"}</span>
           </div>
           <div className="flex items-center gap-1.5">
             <CheckCircle2 className="w-3.5 h-3.5 text-emerald-500 shrink-0" />
-            <span>Gather medication list or patient ID</span>
+            <span>{language === 'kn' ? 'ಔಷಧ ಚೀಟಿ ಅಥವಾ ರೋಗಿಯ ದಾಖಲೆಗಳನ್ನು ಇಟ್ಟುಕೊಳ್ಳಿ' : language === 'hi' ? 'दवाओं की सूची या मरीज की आईडी तैयार रखें' : 'Gather medication list or patient ID'}</span>
           </div>
         </div>
       </div>
