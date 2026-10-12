@@ -42,7 +42,7 @@ In an emergency, a patient triggers an SOS request with one tap or through a det
 ## 🏗️ Tech Stack
 - **Frontend**: React 19, Tailwind CSS v4, Lucide Icons, Web Audio API
 - **Backend**: Node.js, Express.js (REST APIs, CORS, JSON Middleware)
-- **Database**: SQLite Database (`sql.js`) with automatic file persistence (`arogyavahini.sqlite`)
+- **Database**: PostgreSQL / Neon Serverless Database (`pg` connection pool with parameterized queries)
 - **Development Tooling**: Vite, TypeScript, `tsx`, `esbuild`
 
 ---
@@ -121,7 +121,7 @@ In an emergency, a patient triggers an SOS request with one tap or through a det
 
 ### System & Demo Control
 - `GET /api/stats` – Aggregated statistics for admin dashboard
-- `POST /api/demo/reset` – Reset SQLite database to clean sample dataset
+- `POST /api/demo/reset` – Reset PostgreSQL database to clean sample dataset
 
 ---
 

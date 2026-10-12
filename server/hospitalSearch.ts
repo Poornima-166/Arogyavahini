@@ -1,6 +1,6 @@
 import { HospitalOption } from '../src/types.js';
 import { calculateGeoDistanceKm } from './routeOptimizer.js';
-import { getDb } from './db.js';
+import { dbQuery } from './config/database.js';
 
 interface RawOverpassElement {
   id: number;
@@ -298,18 +298,8 @@ export async function searchRealNearbyHospitals(
 
   // Attempt 3: Authoritative Database Registered Hospitals & Proximity Engine
   try {
-    const db = await getDb();
-    const query = db.exec('SELECT * FROM hospitals');
-    if (query && query[0] && query[0].values && query[0].values.length > 0) {
-      const cols = query[0].columns;
-      const dbHospitals = query[0].values.map((v: any[]) => {
-        const obj: any = {};
-        cols.forEach((c: string, i: number) => {
-          obj[c] = v[i];
-        });
-        return obj;
-      });
-
+    const dbHospitals = await dbQuery('SELECT * FROM hospitals');
+    if (dbHospitals && dbHospitals.length > 0) {
       // Calculate distance from patient coordinates to each hospital
       const evaluated: HospitalOption[] = dbHospitals.map((h: any, idx: number) => {
         let rawDist = calculateGeoDistanceKm([latitude, longitude], [h.latitude, h.longitude]);

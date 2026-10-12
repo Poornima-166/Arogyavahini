@@ -566,10 +566,10 @@ export const HomeHero: React.FC<HomeHeroProps> = ({ onOpenAuth }) => {
               <Radio className="w-5 h-5 text-[#F20D25]" />
             </div>
             <h3 className="text-base font-bold text-slate-900 dark:text-white">
-              Traffic Signal Priority
+              Green Corridor Coordination
             </h3>
             <p className="text-xs sm:text-sm text-slate-600 dark:text-slate-300 leading-relaxed">
-              Integrates with smart IoT traffic controllers to request corridor preemption where connected hardware is operational.
+              Coordinates green corridor emergency transit routes with municipal traffic conditions for expedited hospital access.
             </p>
           </div>
         </div>

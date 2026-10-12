@@ -1,20 +1,8 @@
 import { Router, Request, Response } from 'express';
-import { getDb } from '../db.js';
+import { dbQuery } from '../config/database.js';
 import { calculateGeoDistanceKm, isValidCoord, normalizeCoord, optimizeRouteAsync } from '../routeOptimizer.js';
 
 export const navigationRoutes = Router();
-
-function formatQueryResult(result: any): any[] {
-  if (!result || !result.columns || !result.values) return [];
-  const columns = result.columns;
-  return result.values.map((row: any[]) => {
-    const obj: any = {};
-    columns.forEach((col: string, index: number) => {
-      obj[col] = row[index];
-    });
-    return obj;
-  });
-}
 
 /**
  * Format step distance into human-friendly text
@@ -202,15 +190,15 @@ navigationRoutes.get('/route', async (req: Request, res: Response) => {
     // If emergencyId provided, update emergency record with this route in DB
     if (emergencyId) {
       try {
-        const db = await getDb();
         const emId = Number(emergencyId);
-        db.run(
+        await dbQuery(
           `UPDATE emergency_requests SET
-             current_distance_km = ${routeData.distanceKm},
-             current_eta_minutes = ${routeData.estimatedMinutes},
-             current_traffic = '${routeData.traffic}',
-             route_updated_at = datetime('now')
-           WHERE id = ${emId};`
+             current_distance_km = $1,
+             current_eta_minutes = $2,
+             current_traffic = $3,
+             route_updated_at = NOW()
+           WHERE id = $4`,
+          [routeData.distanceKm, routeData.estimatedMinutes, routeData.traffic, emId]
         );
       } catch (err) {
         console.warn('[NavigationAPI] Error updating emergency with route:', err);
@@ -301,9 +289,7 @@ navigationRoutes.get('/nearby-hospitals', async (req: Request, res: Response) =>
     const normUser = normalizeCoord(uLat, uLng)!;
     const maxRadiusKm = parseFloat(radius as string) || 30;
 
-    const db = await getDb();
-    const query = db.exec('SELECT * FROM hospitals ORDER BY id ASC');
-    const allHospitals = formatQueryResult(query[0]);
+    const allHospitals = await dbQuery('SELECT * FROM hospitals ORDER BY id ASC');
 
     const emTypeLower = (emergencyType as string || '').toLowerCase();
     const isCardiac = emTypeLower.includes('cardiac') || emTypeLower.includes('heart') || emTypeLower.includes('chest');
@@ -365,7 +351,7 @@ navigationRoutes.get('/nearby-hospitals', async (req: Request, res: Response) =>
 /**
  * GET /api/navigation/traffic
  * Query params: lat, lng, routeId, emergencyId
- * Returns actual IoT green corridor signal preemption status & traffic conditions
+ * Returns municipal green corridor coordination status & traffic conditions
  */
 navigationRoutes.get('/traffic', async (req: Request, res: Response) => {
   try {

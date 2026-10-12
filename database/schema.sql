@@ -223,30 +223,7 @@ CREATE TABLE IF NOT EXISTS patient_reports (
 );
 
 -- ==============================================================================
--- 10. TRAFFIC_SIGNAL_PRIORITY_REQUESTS TABLE (IoT & ESP32 Preemption Log)
--- ==============================================================================
-CREATE TABLE IF NOT EXISTS traffic_signal_priority_requests (
-    id SERIAL PRIMARY KEY,
-    emergency_id INTEGER REFERENCES emergency_requests(id) ON DELETE SET NULL,
-    ambulance_id INTEGER REFERENCES ambulances(id) ON DELETE SET NULL,
-    junction_id VARCHAR(50) NOT NULL,
-    junction_name VARCHAR(150) NOT NULL,
-    route_direction VARCHAR(30) NOT NULL CHECK (route_direction IN ('ROUTE_A', 'ROUTE_B', 'NORMAL_MODE', 'RESTORE_NORMAL')),
-    command_sent VARCHAR(50) NOT NULL,
-    esp32_ip_address VARCHAR(45) NOT NULL,
-    http_status_code INTEGER,
-    execution_status VARCHAR(30) NOT NULL DEFAULT 'SENT' CHECK (execution_status IN ('SENT', 'SUCCESS', 'HARDWARE_OFFLINE', 'TIMEOUT', 'FAILED')),
-    priority_duration_seconds INTEGER DEFAULT 25,
-    triggered_by VARCHAR(50) DEFAULT 'AUTO_APPROACH_SENSOR',
-    created_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP,
-    restored_at TIMESTAMP WITH TIME ZONE
-);
-
-CREATE INDEX IF NOT EXISTS idx_traffic_priority_junction ON traffic_signal_priority_requests(junction_id);
-CREATE INDEX IF NOT EXISTS idx_traffic_priority_emergency ON traffic_signal_priority_requests(emergency_id);
-
--- ==============================================================================
--- 11. NOTIFICATIONS TABLE (Multi-Role Alert Feeds)
+-- 10. NOTIFICATIONS TABLE (Multi-Role Alert Feeds)
 -- ==============================================================================
 CREATE TABLE IF NOT EXISTS notifications (
     id SERIAL PRIMARY KEY,

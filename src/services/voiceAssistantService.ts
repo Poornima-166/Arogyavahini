@@ -746,11 +746,11 @@ export async function executeVoiceCommand(
     if (traffic) {
       let response = '';
       if (lang === 'kn') {
-        response = `ಈ ಮಾರ್ಗದಲ್ಲಿ ಸಂಚಾರ ಸಾಂದ್ರತೆ ${traffic === 'Low' ? 'ಕಡಿಮೆ' : traffic === 'Heavy' ? 'ಹೆಚ್ಚು' : 'ಸಾಧಾರಣ'}ವಾಗಿದೆ.${isCorridorActive ? ' ತುರ್ತು ಹಸಿರು ಸಿಗ್ನಲ್ ಪ್ರಿಯಾರಿಟಿ ಸಕ್ರಿಯವಾಗಿದೆ.' : ''}`;
+        response = `ಈ ಮಾರ್ಗದಲ್ಲಿ ಸಂಚಾರ ಸಾಂದ್ರತೆ ${traffic === 'Low' ? 'ಕಡಿಮೆ' : traffic === 'Heavy' ? 'ಹೆಚ್ಚು' : 'ಸಾಧಾರಣ'}ವಾಗಿದೆ.${isCorridorActive ? ' ತುರ್ತು ಗ್ರೀನ್ ಕಾರಿಡಾರ್ ಸಮನ್ವಯ ಸಕ್ರಿಯವಾಗಿದೆ.' : ''}`;
       } else if (lang === 'hi') {
-        response = `इस मार्ग पर ट्रैफिक ${traffic === 'Low' ? 'कम' : traffic === 'Heavy' ? 'भारी' : 'मध्यम'} है।${isCorridorActive ? ' आपातकालीन सिग्नल प्राथमिकता चालू है।' : ''}`;
+        response = `इस मार्ग पर ट्रैफिक ${traffic === 'Low' ? 'कम' : traffic === 'Heavy' ? 'भारी' : 'मध्यम'} है।${isCorridorActive ? ' आपातकालीन ग्रीन कॉरिडोर समन्वय चालू है।' : ''}`;
       } else {
-        response = `Traffic on this route is currently ${traffic.toLowerCase()}.${isCorridorActive ? ' Green corridor IoT signal preemption is active.' : ''}`;
+        response = `Traffic on this route is currently ${traffic.toLowerCase()}.${isCorridorActive ? ' Emergency green corridor coordination is active.' : ''}`;
       }
       conversationMemory.lastSpokenAnswer = response;
       return { intent, confidence, spokenResponse: response, entities };

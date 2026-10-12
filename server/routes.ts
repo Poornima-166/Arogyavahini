@@ -1,15 +1,28 @@
+/**
+ * ==============================================================================
+ * PROJECT: AROGYAVAHINI
+ * MODULE:  Unified Express REST API Routes (Neon PostgreSQL Exclusively)
+ * ==============================================================================
+ * All routes query Neon PostgreSQL directly with parameterized queries.
+ * Zero SQLite/sql.js dependencies.
+ */
+
 import { Router, Request, Response } from 'express';
 import crypto from 'crypto';
 import { GoogleGenAI } from '@google/genai';
-import { getDb, saveDb, resetDatabase } from './db.js';
-import { isPostgresActive, getPostgresPool, disablePostgresPool } from './config/database.js';
+import {
+  getPostgresPool,
+  dbQuery,
+  resetDatabase,
+  createPgNotification,
+  notifyPgRole,
+} from './config/database.js';
 import { hashPassword, verifyPassword, generateUuid } from './security.js';
 import {
   optimizeRoute,
   optimizeHospitals,
   optimizeRouteAsync,
   optimizeHospitalsAsync,
-  calculateRouteScore,
   calculateGeoDistanceKm,
   isValidCoord,
   normalizeCoord,
@@ -17,7 +30,6 @@ import {
   getPrimaryLocationAnchor,
 } from './routeOptimizer.js';
 import { searchRealNearbyHospitals } from './hospitalSearch.js';
-import { trafficRoutes } from './routes/trafficRoutes.js';
 import {
   broadcastEmergencyCreated,
   broadcastEmergencyAssigned,
@@ -26,28 +38,11 @@ import {
   broadcastPatientVitalsUpdated,
   broadcastAmbulanceLocation,
 } from './sockets/socketHandler.js';
-
 import { navigationRoutes } from './routes/navigationRoutes.js';
 
 export const apiRouter = Router();
 
-// Mount IoT Traffic Signal Priority Routes
-apiRouter.use('/traffic-signals', trafficRoutes);
-apiRouter.use('/traffic', trafficRoutes);
 apiRouter.use('/navigation', navigationRoutes);
-
-// Helper to convert sql.js QueryResults to array of objects
-function formatQueryResult(result: any): any[] {
-  if (!result || !result.columns || !result.values) return [];
-  const columns = result.columns;
-  return result.values.map((row: any[]) => {
-    const obj: any = {};
-    columns.forEach((col: string, index: number) => {
-      obj[col] = row[index];
-    });
-    return obj;
-  });
-}
 
 // Helper to safely parse JSON route fields in emergency records
 function parseEmergencyRecord(e: any): any {
@@ -68,7 +63,7 @@ function parseEmergencyRecord(e: any): any {
     }
   }
 
-  // Validate patient coordinates to prevent Africa / Null Island bug
+  // Validate patient coordinates to prevent invalid coordinates
   if (!isValidCoord(parsed.latitude, parsed.longitude)) {
     if (isValidCoord(parsed.driver_current_latitude, parsed.driver_current_longitude)) {
       parsed.latitude = parseFloat((Number(parsed.driver_current_latitude) + 0.015).toFixed(5));
@@ -82,7 +77,7 @@ function parseEmergencyRecord(e: any): any {
     }
   }
 
-  // Check if existing optimized_routes contain [0, 0] or invalid coordinates or cross-continental routes
+  // Check if existing optimized_routes contain invalid coordinates
   let needsRecompute = false;
   if (Array.isArray(parsed.optimized_routes) && parsed.optimized_routes.length > 0) {
     for (const r of parsed.optimized_routes) {
@@ -134,91 +129,8 @@ function parseEmergencyRecord(e: any): any {
   return parsed;
 }
 
-// Helper to create notifications in DB
-function createNotification(
-  db: any,
-  params: {
-    userId?: string | number | null;
-    role?: 'patient' | 'driver' | 'admin';
-    title: string;
-    message: string;
-    notificationType: string;
-    emergencyRequestId?: number | null;
-    isRead?: number;
-  }
-) {
-  const now = new Date().toISOString();
-  db.run(
-    `INSERT INTO notifications (user_id, role, title, message, notification_type, emergency_request_id, is_read, created_at)
-     VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
-    [
-      params.userId !== undefined && params.userId !== null ? String(params.userId) : null,
-      params.role || null,
-      params.title,
-      params.message,
-      params.notificationType,
-      params.emergencyRequestId !== undefined ? params.emergencyRequestId : null,
-      params.isRead || 0,
-      now,
-    ]
-  );
-}
-
-// Helper to notify all users with a specific role
-function notifyRole(
-  db: any,
-  role: 'patient' | 'driver' | 'admin',
-  params: {
-    title: string;
-    message: string;
-    notificationType: string;
-    emergencyRequestId?: number | null;
-    excludeUserId?: string | number | null;
-  }
-) {
-  const now = new Date().toISOString();
-  let querySql = `SELECT id FROM users WHERE role = '${role}'`;
-  if (params.excludeUserId) {
-    const cleanExclude = String(params.excludeUserId).replace(/'/g, "''");
-    querySql += ` AND id != '${cleanExclude}'`;
-  }
-  const usersResult = db.exec(querySql);
-  const users = formatQueryResult(usersResult[0]);
-
-  if (users.length > 0) {
-    for (const u of users) {
-      db.run(
-        `INSERT INTO notifications (user_id, role, title, message, notification_type, emergency_request_id, is_read, created_at)
-         VALUES (?, ?, ?, ?, ?, ?, 0, ?)`,
-        [
-          u.id,
-          role,
-          params.title,
-          params.message,
-          params.notificationType,
-          params.emergencyRequestId || null,
-          now,
-        ]
-      );
-    }
-  } else {
-    db.run(
-      `INSERT INTO notifications (user_id, role, title, message, notification_type, emergency_request_id, is_read, created_at)
-       VALUES (NULL, ?, ?, ?, ?, ?, 0, ?)`,
-      [
-        role,
-        params.title,
-        params.message,
-        params.notificationType,
-        params.emergencyRequestId || null,
-        now,
-      ]
-    );
-  }
-}
-
 // ----------------------------------------------------
-// 1. AUTHENTICATION & DEMO ROUTES (JWT & Multi-DB)
+// 1. AUTHENTICATION & DEMO ROUTES (JWT & Neon PostgreSQL)
 // ----------------------------------------------------
 
 const JWT_SECRET = process.env.JWT_SECRET || 'arogyavahini-production-jwt-auth-key-2026';
@@ -266,151 +178,100 @@ export function verifyAuthToken(token: string): any | null {
 async function findUserForLogin(email: string, pass: string): Promise<any | null> {
   const cleanEmail = email.trim().toLowerCase();
 
-  // 1. Try PostgreSQL pool if actively configured in production
-  const pgPool = getPostgresPool();
-  if (pgPool) {
-    try {
-      // Query Neon PostgreSQL users table with password_hash & delete_flag
-      const res = await pgPool.query(
-        `SELECT id, client_id, name, email, password_hash, phone, role, auth_provider, delete_flag, created_at, updated_at 
-         FROM users 
-         WHERE LOWER(email) = LOWER($1) AND (delete_flag IS FALSE OR delete_flag IS NULL) 
-         LIMIT 1`,
-        [cleanEmail]
-      );
-      if (res.rows && res.rows.length > 0) {
-        const u = res.rows[0];
-        const isMatch = verifyPassword(pass, u.password_hash);
-        if (isMatch) {
-          return {
-            id: u.id,
-            client_id: u.client_id || null,
-            name: u.name,
-            email: u.email,
-            phone: u.phone || '',
-            role: u.role,
-            auth_provider: u.auth_provider || 'local',
-            delete_flag: u.delete_flag || false,
-            created_at: u.created_at,
-            updated_at: u.updated_at,
-            blood_type: 'B+',
-            allergies: 'None reported',
-            emergency_contact_name: 'Rajesh Rao',
-            emergency_contact_phone: '+91 98451 98765',
-            emergency_contact_relation: 'Spouse',
-            medical_notes: 'Mild seasonal asthma; carries inhaler',
-          };
-        }
-      }
-      // PostgreSQL is active and user was not found with matching credentials
-      return null;
-    } catch (pgErr) {
-      console.warn('[Auth] PostgreSQL lookup error:', pgErr);
-      if (process.env.NODE_ENV === 'production') {
-        return null;
-      }
+  const rows = await dbQuery(
+    `SELECT id, client_id, name, email, password_hash, phone, role, auth_provider, delete_flag, created_at, updated_at,
+            blood_type, allergies, emergency_contact_name, emergency_contact_phone, emergency_contact_relation, medical_notes
+     FROM users 
+     WHERE LOWER(email) = LOWER($1) AND (delete_flag IS FALSE OR delete_flag IS NULL) 
+     LIMIT 1`,
+    [cleanEmail]
+  );
+
+  if (rows && rows.length > 0) {
+    const u = rows[0];
+    const isMatch = verifyPassword(pass, u.password_hash) || u.password_hash === pass;
+    if (isMatch) {
+      return {
+        id: u.id,
+        client_id: u.client_id || null,
+        name: u.name,
+        email: u.email,
+        phone: u.phone || '',
+        role: u.role,
+        auth_provider: u.auth_provider || 'local',
+        delete_flag: u.delete_flag || false,
+        created_at: u.created_at,
+        updated_at: u.updated_at,
+        blood_type: u.blood_type || 'B+',
+        allergies: u.allergies || 'None reported',
+        emergency_contact_name: u.emergency_contact_name || 'Rajesh Rao',
+        emergency_contact_phone: u.emergency_contact_phone || '+91 98451 98765',
+        emergency_contact_relation: u.emergency_contact_relation || 'Spouse',
+        medical_notes: u.medical_notes || 'Mild seasonal asthma; carries inhaler',
+      };
     }
   }
 
-  // 2. Query embedded SQLite engine with parameterized statement (local development only)
-  const db = await getDb();
-  const stmt = db.prepare(
-    'SELECT id, name, email, password, phone, role, created_at, blood_type, allergies, emergency_contact_name, emergency_contact_phone, emergency_contact_relation, medical_notes FROM users WHERE LOWER(email) = :email LIMIT 1'
-  );
-  stmt.bind({ ':email': cleanEmail });
-  let user: any = null;
-  if (stmt.step()) {
-    const raw = stmt.getAsObject();
-    if (raw && (verifyPassword(pass, String(raw.password ?? '')) || raw.password === pass)) {
-      user = raw;
-    }
-  }
-  stmt.free();
-  return user;
+  return null;
 }
 
 async function findDemoUser(role: string): Promise<any | null> {
-  const pgPool = getPostgresPool();
-  if (pgPool) {
-    try {
-      const res = await pgPool.query(
-        `SELECT id, client_id, name, email, password_hash, phone, role, auth_provider, delete_flag, created_at, updated_at 
-         FROM users 
-         WHERE role = $1 AND (delete_flag IS FALSE OR delete_flag IS NULL) 
-         ORDER BY created_at ASC 
-         LIMIT 1`,
-        [role]
-      );
-      if (res.rows && res.rows.length > 0) {
-        const u = res.rows[0];
-        return {
-          id: u.id,
-          client_id: u.client_id || null,
-          name: u.name,
-          email: u.email,
-          phone: u.phone || '',
-          role: u.role,
-          auth_provider: u.auth_provider || 'local',
-          delete_flag: u.delete_flag || false,
-          created_at: u.created_at,
-          updated_at: u.updated_at,
-          blood_type: 'B+',
-          allergies: 'None reported',
-          emergency_contact_name: 'HQ Dispatch',
-          emergency_contact_phone: '+91 80 2200 1122',
-          emergency_contact_relation: 'Next of Kin',
-          medical_notes: 'None logged',
-        };
-      }
-      // Demo account not found in PostgreSQL
-      return null;
-    } catch (pgErr) {
-      console.warn('[Auth] PostgreSQL demo lookup error:', pgErr);
-      if (process.env.NODE_ENV === 'production') {
-        return null;
-      }
-    }
+  const rows = await dbQuery(
+    `SELECT id, client_id, name, email, password_hash, phone, role, auth_provider, delete_flag, created_at, updated_at,
+            blood_type, allergies, emergency_contact_name, emergency_contact_phone, emergency_contact_relation, medical_notes
+     FROM users 
+     WHERE role = $1 AND (delete_flag IS FALSE OR delete_flag IS NULL) 
+     ORDER BY created_at ASC 
+     LIMIT 1`,
+    [role]
+  );
+
+  if (rows && rows.length > 0) {
+    const u = rows[0];
+    return {
+      id: u.id,
+      client_id: u.client_id || null,
+      name: u.name,
+      email: u.email,
+      phone: u.phone || '',
+      role: u.role,
+      auth_provider: u.auth_provider || 'local',
+      delete_flag: u.delete_flag || false,
+      created_at: u.created_at,
+      updated_at: u.updated_at,
+      blood_type: u.blood_type || 'B+',
+      allergies: u.allergies || 'None reported',
+      emergency_contact_name: u.emergency_contact_name || 'HQ Dispatch',
+      emergency_contact_phone: u.emergency_contact_phone || '+91 80 2200 1122',
+      emergency_contact_relation: u.emergency_contact_relation || 'Command Center',
+      medical_notes: u.medical_notes || 'None logged',
+    };
   }
 
-  // Local development fallback
-  const db = await getDb();
-  const stmt = db.prepare(
-    'SELECT id, name, email, phone, role, created_at, blood_type, allergies, emergency_contact_name, emergency_contact_phone, emergency_contact_relation, medical_notes FROM users WHERE role = :role ORDER BY id ASC LIMIT 1'
-  );
-  stmt.bind({ ':role': role });
-  let user: any = null;
-  if (stmt.step()) {
-    user = stmt.getAsObject();
-  }
-  stmt.free();
-  return user;
+  return null;
 }
 
-// Helper function to resolve a valid, non-null client_id for user creation
-// Reuses the appropriate existing client_id from an existing user in Neon PostgreSQL if available,
-// or uses the client_id passed in the request if valid, or generates a fresh UUID with generateUuid() (crypto.randomUUID())
-async function resolveClientId(pgPool: any, requestedClientId?: string | null): Promise<string> {
+// Helper function to resolve a valid, non-null client_id for user creation in Neon PostgreSQL
+async function resolveClientId(requestedClientId?: string | null): Promise<string> {
   if (requestedClientId && typeof requestedClientId === 'string' && requestedClientId.trim().length > 0) {
     return requestedClientId.trim();
   }
 
-  // Check if an existing client_id already exists in the users table
   try {
-    const existingClientRes = await pgPool.query(
+    const existingClientRes = await dbQuery(
       `SELECT client_id FROM users 
        WHERE client_id IS NOT NULL 
        AND (delete_flag IS FALSE OR delete_flag IS NULL) 
        ORDER BY created_at ASC 
        LIMIT 1`
     );
-    if (existingClientRes.rows && existingClientRes.rows.length > 0 && existingClientRes.rows[0].client_id) {
-      return existingClientRes.rows[0].client_id;
+    if (existingClientRes.length > 0 && existingClientRes[0].client_id) {
+      return existingClientRes[0].client_id;
     }
   } catch (err) {
     console.warn('[Auth] Error querying existing client_id from users:', err);
   }
 
-  // Fallback to standalone UUID
   return generateUuid();
 }
 
@@ -428,89 +289,44 @@ const handleRegister = async (req: Request, res: Response) => {
     const cleanName = name.trim();
     const cleanPhone = (phone || '').trim();
 
-    // 1. Check if email already exists in PostgreSQL and insert into Neon users table
-    const pgPool = getPostgresPool();
-    if (pgPool) {
-      try {
-        const check = await pgPool.query(
-          'SELECT id FROM users WHERE LOWER(email) = LOWER($1) AND (delete_flag IS FALSE OR delete_flag IS NULL)',
-          [cleanEmail]
-        );
-        if (check.rows && check.rows.length > 0) {
-          return res.status(400).json({ error: 'User with this email already exists' });
-        }
+    const check = await dbQuery(
+      'SELECT id FROM users WHERE LOWER(email) = LOWER($1) AND (delete_flag IS FALSE OR delete_flag IS NULL)',
+      [cleanEmail]
+    );
 
-        const newId = generateUuid();
-        const hashedPassword = hashPassword(password);
-        const clientId = await resolveClientId(pgPool, req.body.client_id);
-
-        const insertRes = await pgPool.query(
-          `INSERT INTO users (id, client_id, name, email, password_hash, phone, role, auth_provider, delete_flag, created_at, updated_at) 
-           VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, NOW(), NOW()) 
-           RETURNING id, client_id, name, email, phone, role, auth_provider, delete_flag, created_at, updated_at`,
-          [newId, clientId, cleanName, cleanEmail, hashedPassword, cleanPhone, assignedRole, 'local', false]
-        );
-        const row = insertRes.rows[0];
-        const user = {
-          id: row.id,
-          client_id: row.client_id || null,
-          name: row.name,
-          email: row.email,
-          phone: row.phone || '',
-          role: row.role,
-          auth_provider: row.auth_provider || 'local',
-          delete_flag: row.delete_flag || false,
-          created_at: row.created_at,
-          updated_at: row.updated_at,
-          blood_type: req.body.blood_type || 'B+',
-          allergies: req.body.allergies || 'None reported',
-          emergency_contact_name: req.body.emergency_contact_name || '',
-          emergency_contact_phone: req.body.emergency_contact_phone || '',
-          emergency_contact_relation: req.body.emergency_contact_relation || 'Next of Kin',
-          medical_notes: req.body.medical_notes || '',
-        };
-        const token = createAuthToken(user);
-        return res.status(201).json({
-          message: 'Registration successful',
-          user,
-          token,
-        });
-      } catch (pgErr) {
-        console.warn('[Auth] PostgreSQL register error:', pgErr);
-        if (process.env.NODE_ENV === 'production') {
-          return res.status(500).json({ error: 'Failed to create user account in database' });
-        }
-      }
-    }
-
-    // 2. Fallback to SQLite (local development only)
-    const db = await getDb();
-    const checkStmt = db.prepare('SELECT id FROM users WHERE email = :email');
-    checkStmt.bind({ ':email': cleanEmail });
-    if (checkStmt.step()) {
-      checkStmt.free();
+    if (check.length > 0) {
       return res.status(400).json({ error: 'User with this email already exists' });
     }
-    checkStmt.free();
 
-    const localHashedPassword = hashPassword(password);
-    try {
-      db.run(
-        'INSERT INTO users (name, email, password, password_hash, phone, role) VALUES (?, ?, ?, ?, ?, ?)',
-        [cleanName, cleanEmail, localHashedPassword, localHashedPassword, cleanPhone, assignedRole]
-      );
-    } catch {
-      db.run(
-        'INSERT INTO users (name, email, password, phone, role) VALUES (?, ?, ?, ?, ?)',
-        [cleanName, cleanEmail, localHashedPassword, cleanPhone, assignedRole]
-      );
-    }
+    const newId = generateUuid();
+    const hashedPassword = hashPassword(password);
+    const clientId = await resolveClientId(req.body.client_id);
 
-    const userResult = db.exec('SELECT id, name, email, phone, role, created_at, blood_type, allergies, emergency_contact_name, emergency_contact_phone, emergency_contact_relation, medical_notes FROM users WHERE email = "' + cleanEmail + '"');
-    const users = formatQueryResult(userResult[0]);
-    const user = users[0];
+    const bloodType = req.body.blood_type || 'B+';
+    const allergies = req.body.allergies || 'None reported';
+    const emergencyContactName = req.body.emergency_contact_name || '';
+    const emergencyContactPhone = req.body.emergency_contact_phone || '';
+    const emergencyContactRelation = req.body.emergency_contact_relation || 'Next of Kin';
+    const medicalNotes = req.body.medical_notes || '';
 
-    createNotification(db, {
+    const insertRes = await dbQuery(
+      `INSERT INTO users (
+        id, client_id, name, email, password_hash, phone, role, auth_provider, delete_flag,
+        blood_type, allergies, emergency_contact_name, emergency_contact_phone, emergency_contact_relation, medical_notes,
+        created_at, updated_at
+      ) 
+      VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, NOW(), NOW()) 
+      RETURNING id, client_id, name, email, phone, role, auth_provider, delete_flag, blood_type, allergies, emergency_contact_name, emergency_contact_phone, emergency_contact_relation, medical_notes, created_at, updated_at`,
+      [
+        newId, clientId, cleanName, cleanEmail, hashedPassword, cleanPhone, assignedRole, 'local', false,
+        bloodType, allergies, emergencyContactName, emergencyContactPhone, emergencyContactRelation, medicalNotes
+      ]
+    );
+
+    const user = insertRes[0];
+
+    // Notification for user and admin
+    await createPgNotification({
       userId: user.id,
       role: assignedRole,
       title: 'Welcome to Arogyavahini',
@@ -518,17 +334,14 @@ const handleRegister = async (req: Request, res: Response) => {
       notificationType: 'USER_WELCOME',
     });
 
-    notifyRole(db, 'admin', {
+    await notifyPgRole('admin', {
       title: 'New User Registration',
       message: `New user registered: ${cleanName} (${cleanEmail}) as ${assignedRole.toUpperCase()}.`,
       notificationType: 'ADMIN_USER_REGISTERED',
       excludeUserId: user.id,
     });
 
-    saveDb(db);
-
     const token = createAuthToken(user);
-
     return res.status(201).json({
       message: 'Registration successful',
       user,
@@ -647,55 +460,39 @@ apiRouter.get('/patient/profile/:userId', async (req: Request, res: Response) =>
       return res.status(400).json({ error: 'Valid user ID is required' });
     }
 
-    const pgPool = getPostgresPool();
-    if (pgPool) {
-      try {
-        const resPg = await pgPool.query(
-          'SELECT id, client_id, name, email, phone, role, auth_provider, delete_flag, created_at, updated_at FROM users WHERE id::text = $1::text AND (delete_flag IS FALSE OR delete_flag IS NULL)',
-          [userId]
-        );
-        if (resPg.rows && resPg.rows.length > 0) {
-          const u = resPg.rows[0];
-          return res.json({
-            user: {
-              id: u.id,
-              client_id: u.client_id || null,
-              name: u.name,
-              email: u.email,
-              phone: u.phone || '',
-              role: u.role,
-              auth_provider: u.auth_provider || 'local',
-              delete_flag: u.delete_flag || false,
-              created_at: u.created_at,
-              updated_at: u.updated_at,
-              blood_type: 'B+',
-              allergies: 'None reported',
-              emergency_contact_name: 'Emergency Dispatch',
-              emergency_contact_phone: '+91 108',
-              emergency_contact_relation: 'Next of Kin',
-              medical_notes: '',
-            },
-          });
-        }
-        return res.status(404).json({ error: 'User not found' });
-      } catch (pgErr) {
-        console.warn('[Profile] PostgreSQL query fallback:', pgErr);
-        if (process.env.NODE_ENV === 'production') {
-          return res.status(500).json({ error: 'Failed to fetch patient profile from database' });
-        }
-      }
-    }
-
-    const db = await getDb();
-    const cleanId = String(userId).replace(/'/g, "''");
-    const query = db.exec(`SELECT id, name, email, phone, role, created_at, blood_type, allergies, emergency_contact_name, emergency_contact_phone, emergency_contact_relation, medical_notes FROM users WHERE id = '${cleanId}'`);
-    const users = formatQueryResult(query[0]);
+    const users = await dbQuery(
+      `SELECT id, client_id, name, email, phone, role, auth_provider, delete_flag, created_at, updated_at,
+              blood_type, allergies, emergency_contact_name, emergency_contact_phone, emergency_contact_relation, medical_notes
+       FROM users 
+       WHERE id::text = $1::text AND (delete_flag IS FALSE OR delete_flag IS NULL)`,
+      [userId]
+    );
 
     if (users.length === 0) {
       return res.status(404).json({ error: 'User not found' });
     }
 
-    return res.json({ user: users[0] });
+    const u = users[0];
+    return res.json({
+      user: {
+        id: u.id,
+        client_id: u.client_id || null,
+        name: u.name,
+        email: u.email,
+        phone: u.phone || '',
+        role: u.role,
+        auth_provider: u.auth_provider || 'local',
+        delete_flag: u.delete_flag || false,
+        created_at: u.created_at,
+        updated_at: u.updated_at,
+        blood_type: u.blood_type || 'B+',
+        allergies: u.allergies || 'None reported',
+        emergency_contact_name: u.emergency_contact_name || 'Emergency Dispatch',
+        emergency_contact_phone: u.emergency_contact_phone || '+91 108',
+        emergency_contact_relation: u.emergency_contact_relation || 'Next of Kin',
+        medical_notes: u.medical_notes || '',
+      },
+    });
   } catch (error: any) {
     console.error('Get profile error:', error);
     return res.status(500).json({ error: error.message || 'Failed to fetch patient profile' });
@@ -721,70 +518,19 @@ apiRouter.put('/patient/profile/:userId', async (req: Request, res: Response) =>
       medical_notes,
     } = req.body;
 
-    const pgPool = getPostgresPool();
-    if (pgPool) {
-      try {
-        const updateRes = await pgPool.query(
-          `UPDATE users 
-           SET name = COALESCE($1, name), 
-               phone = COALESCE($2, phone), 
-               updated_at = NOW()
-           WHERE id::text = $3::text AND (delete_flag IS FALSE OR delete_flag IS NULL)
-           RETURNING id, client_id, name, email, phone, role, auth_provider, delete_flag, created_at, updated_at`,
-          [name ? name.trim() : null, phone ? phone.trim() : null, userId]
-        );
-        if (updateRes.rows && updateRes.rows.length > 0) {
-          const u = updateRes.rows[0];
-          return res.json({
-            message: 'Medical profile updated successfully',
-            user: {
-              id: u.id,
-              client_id: u.client_id || null,
-              name: u.name,
-              email: u.email,
-              phone: u.phone || '',
-              role: u.role,
-              auth_provider: u.auth_provider || 'local',
-              delete_flag: u.delete_flag || false,
-              created_at: u.created_at,
-              updated_at: u.updated_at,
-              blood_type: blood_type || 'B+',
-              allergies: allergies || 'None reported',
-              emergency_contact_name: emergency_contact_name || '',
-              emergency_contact_phone: emergency_contact_phone || '',
-              emergency_contact_relation: emergency_contact_relation || 'Next of Kin',
-              medical_notes: medical_notes || '',
-            },
-          });
-        }
-        return res.status(404).json({ error: 'User not found' });
-      } catch (pgErr) {
-        console.warn('[Profile Update] PostgreSQL error:', pgErr);
-        if (process.env.NODE_ENV === 'production') {
-          return res.status(500).json({ error: 'Failed to update patient profile in database' });
-        }
-      }
-    }
-
-    const db = await getDb();
-    const cleanId = String(userId).replace(/'/g, "''");
-    const existing = db.exec(`SELECT id FROM users WHERE id = '${cleanId}'`);
-    if (!existing || existing.length === 0 || !existing[0]?.values?.length) {
-      return res.status(404).json({ error: 'User not found' });
-    }
-
-    // Build update query dynamically
-    db.run(
-      `UPDATE users SET 
-        name = COALESCE(?, name),
-        phone = COALESCE(?, phone),
-        blood_type = ?,
-        allergies = ?,
-        emergency_contact_name = ?,
-        emergency_contact_phone = ?,
-        emergency_contact_relation = ?,
-        medical_notes = ?
-       WHERE id = ?`,
+    const updateRes = await dbQuery(
+      `UPDATE users 
+       SET name = COALESCE($1, name), 
+           phone = COALESCE($2, phone),
+           blood_type = COALESCE($3, blood_type),
+           allergies = COALESCE($4, allergies),
+           emergency_contact_name = COALESCE($5, emergency_contact_name),
+           emergency_contact_phone = COALESCE($6, emergency_contact_phone),
+           emergency_contact_relation = COALESCE($7, emergency_contact_relation),
+           medical_notes = COALESCE($8, medical_notes),
+           updated_at = NOW()
+       WHERE id::text = $9::text AND (delete_flag IS FALSE OR delete_flag IS NULL)
+       RETURNING id, client_id, name, email, phone, role, auth_provider, delete_flag, blood_type, allergies, emergency_contact_name, emergency_contact_phone, emergency_contact_relation, medical_notes, created_at, updated_at`,
       [
         name ? name.trim() : null,
         phone ? phone.trim() : null,
@@ -798,14 +544,13 @@ apiRouter.put('/patient/profile/:userId', async (req: Request, res: Response) =>
       ]
     );
 
-    saveDb(db);
+    if (updateRes.length === 0) {
+      return res.status(404).json({ error: 'User not found' });
+    }
 
-    // Fetch updated user
-    const updatedQuery = db.exec(`SELECT id, name, email, phone, role, created_at, blood_type, allergies, emergency_contact_name, emergency_contact_phone, emergency_contact_relation, medical_notes FROM users WHERE id = '${cleanId}'`);
-    const updatedUser = formatQueryResult(updatedQuery[0])[0];
+    const updatedUser = updateRes[0];
 
-    // Create system confirmation notification
-    createNotification(db, {
+    await createPgNotification({
       userId,
       role: updatedUser.role,
       title: 'Emergency Medical Profile Updated',
@@ -837,8 +582,6 @@ apiRouter.post('/emergency', async (req: Request, res: Response) => {
       return res.status(400).json({ error: 'Patient name, emergency type, location, and phone are required.' });
     }
 
-    const db = await getDb();
-    const now = new Date().toISOString();
     const initialStatus = 'WAITING_FOR_DRIVER';
 
     let norm = normalizeCoord(latitude, longitude);
@@ -857,7 +600,7 @@ apiRouter.post('/emergency', async (req: Request, res: Response) => {
     const finalLat = norm ? norm[0] : null;
     const finalLng = norm ? norm[1] : null;
 
-    // Fetch or default patient medical profile fields
+    // Fetch patient medical profile defaults if patient_id is provided
     let bType = req.body.patient_blood_type;
     let alg = req.body.patient_allergies;
     let ecName = req.body.patient_emergency_contact_name;
@@ -867,10 +610,12 @@ apiRouter.post('/emergency', async (req: Request, res: Response) => {
 
     if (patient_id && (!bType || !ecName)) {
       try {
-        const cleanPatientId = String(patient_id).replace(/'/g, "''");
-        const uResult = db.exec(`SELECT blood_type, allergies, emergency_contact_name, emergency_contact_phone, emergency_contact_relation, medical_notes FROM users WHERE id = '${cleanPatientId}'`);
-        if (uResult && uResult[0]?.values?.length > 0) {
-          const u = formatQueryResult(uResult[0])[0];
+        const uRes = await dbQuery(
+          'SELECT blood_type, allergies, emergency_contact_name, emergency_contact_phone, emergency_contact_relation, medical_notes FROM users WHERE id::text = $1::text',
+          [String(patient_id)]
+        );
+        if (uRes.length > 0) {
+          const u = uRes[0];
           if (!bType) bType = u.blood_type || '';
           if (!alg) alg = u.allergies || '';
           if (!ecName) ecName = u.emergency_contact_name || '';
@@ -883,13 +628,18 @@ apiRouter.post('/emergency', async (req: Request, res: Response) => {
       }
     }
 
-    // Insert emergency request with medical profile fields
-    db.run(
-      `INSERT INTO emergency_requests 
-       (patient_id, patient_name, emergency_type, location, latitude, longitude, phone, notes, driver_id, ambulance_id, status, patient_blood_type, patient_allergies, patient_emergency_contact_name, patient_emergency_contact_phone, patient_emergency_contact_relation, patient_medical_notes, created_at, updated_at) 
-       VALUES (?, ?, ?, ?, ?, ?, ?, ?, NULL, NULL, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+    // Insert emergency request into Neon PostgreSQL
+    const insertRes = await dbQuery(
+      `INSERT INTO emergency_requests (
+        patient_id, patient_name, emergency_type, location, latitude, longitude, phone, notes,
+        driver_id, ambulance_id, status, patient_blood_type, patient_allergies,
+        patient_emergency_contact_name, patient_emergency_contact_phone, patient_emergency_contact_relation,
+        patient_medical_notes, created_at, updated_at
+      ) 
+      VALUES ($1, $2, $3, $4, $5, $6, $7, $8, NULL, NULL, $9, $10, $11, $12, $13, $14, $15, NOW(), NOW())
+      RETURNING id`,
       [
-        patient_id || null,
+        patient_id ? String(patient_id) : null,
         patient_name.trim(),
         emergency_type,
         location.trim(),
@@ -904,14 +654,10 @@ apiRouter.post('/emergency', async (req: Request, res: Response) => {
         ecPhone || null,
         ecRel || null,
         medNotes || null,
-        now,
-        now,
       ]
     );
 
-    // Fetch newly created emergency ID
-    const idResult = db.exec("SELECT last_insert_rowid() as id");
-    const emergencyId = idResult[0]?.values[0]?.[0];
+    const emergencyId = insertRes[0].id;
 
     const medFlags = [
       bType ? `Blood: ${bType}` : '',
@@ -920,20 +666,20 @@ apiRouter.post('/emergency', async (req: Request, res: Response) => {
     ].filter(Boolean).join(' | ');
 
     // Log activity
-    db.run(
-      "INSERT INTO activity_logs (emergency_id, action, performed_by, timestamp) VALUES (?, ?, ?, ?)",
+    await dbQuery(
+      `INSERT INTO activity_logs (emergency_id, action, performed_by, timestamp)
+       VALUES ($1, $2, $3, NOW())`,
       [
         emergencyId,
         `Emergency SOS requested by ${patient_name.trim()}: ${emergency_type} at ${location.trim()}.${medFlags ? ` [Medical Info Transmitted: ${medFlags}]` : ''} Waiting for available ambulance driver to accept.`,
         patient_name.trim(),
-        now,
       ]
     );
 
-    // 1. Patient Notification: Exact user wording
+    // Notifications
     if (patient_id) {
-      createNotification(db, {
-        userId: Number(patient_id),
+      await createPgNotification({
+        userId: String(patient_id),
         role: 'patient',
         title: 'Emergency SOS Submitted',
         message: `Your emergency request has been submitted successfully with medical profile (Blood: ${bType || 'N/A'}, Contact: ${ecName || 'Shared'}). Waiting for an available ambulance driver.`,
@@ -942,8 +688,7 @@ apiRouter.post('/emergency', async (req: Request, res: Response) => {
       });
     }
 
-    // 2. Driver Notification with medical awareness
-    notifyRole(db, 'driver', {
+    await notifyPgRole('driver', {
       title: 'New Emergency Alert',
       message: medFlags 
         ? `New emergency request received (${emergency_type}). 🩸 Patient Medical Info: [${medFlags}]`
@@ -952,19 +697,16 @@ apiRouter.post('/emergency', async (req: Request, res: Response) => {
       emergencyRequestId: Number(emergencyId),
     });
 
-    // 3. Admin Notification: Incident alert
-    notifyRole(db, 'admin', {
+    await notifyPgRole('admin', {
       title: `New SOS Broadcast #${emergencyId}`,
       message: `New emergency request submitted by ${patient_name.trim()}: ${emergency_type} at ${location.trim()}.${medFlags ? ` 🩺 Medical ID: ${medFlags}` : ''}`,
       notificationType: 'ADMIN_EMERGENCY_ALERT',
       emergencyRequestId: Number(emergencyId),
     });
 
-    saveDb(db);
-
-    // Fetch complete record
-    const fullQuery = db.exec(`
-      SELECT 
+    // Fetch complete record with joined ambulance & driver
+    const fullQuery = await dbQuery(
+      `SELECT 
         e.*,
         a.vehicle_number,
         COALESCE(u.name, a.driver_name) as driver_name,
@@ -974,19 +716,19 @@ apiRouter.post('/emergency', async (req: Request, res: Response) => {
         a.status as ambulance_status
       FROM emergency_requests e
       LEFT JOIN ambulances a ON e.ambulance_id = a.id
-      LEFT JOIN users u ON e.driver_id = u.id
-      WHERE e.id = ${emergencyId}
-    `);
+      LEFT JOIN users u ON e.driver_id = u.id::text
+      WHERE e.id = $1`,
+      [emergencyId]
+    );
 
-    const result = formatQueryResult(fullQuery[0]);
-
-    if (result && result[0]) {
-      broadcastEmergencyCreated(result[0]);
+    const createdEmergency = fullQuery[0];
+    if (createdEmergency) {
+      broadcastEmergencyCreated(createdEmergency);
     }
 
     return res.status(201).json({
       message: 'Emergency request received. Waiting for an available ambulance driver to accept your request.',
-      emergency: result[0],
+      emergency: createdEmergency,
       ambulance: null,
     });
   } catch (error: any) {
@@ -1002,19 +744,15 @@ apiRouter.post('/emergency/:id/accept', async (req: Request, res: Response) => {
     const id = Number(req.params.id);
     const { driver_user_id, driver_name, ambulance_id } = req.body;
 
-    const db = await getDb();
-
     // 1. Check if emergency exists and is still waiting for driver
-    const checkQuery = db.exec(`SELECT * FROM emergency_requests WHERE id = ${id}`);
-    const requests = formatQueryResult(checkQuery[0]);
-
+    const requests = await dbQuery('SELECT * FROM emergency_requests WHERE id = $1', [id]);
     if (requests.length === 0) {
       return res.status(404).json({ error: 'Emergency request not found' });
     }
 
     const emergency = requests[0];
 
-    // Prevent multiple drivers accepting (Concurrency protection)
+    // Concurrency protection: already accepted
     if (emergency.ambulance_id !== null || emergency.driver_id !== null || emergency.status !== 'WAITING_FOR_DRIVER') {
       return res.status(409).json({ 
         error: 'This emergency request has already been accepted by another driver.' 
@@ -1025,26 +763,25 @@ apiRouter.post('/emergency/:id/accept', async (req: Request, res: Response) => {
     let targetAmbulance: any = null;
 
     if (ambulance_id) {
-      const ambQuery = db.exec(`SELECT * FROM ambulances WHERE id = ${Number(ambulance_id)}`);
-      const ambs = formatQueryResult(ambQuery[0]);
+      const ambs = await dbQuery('SELECT * FROM ambulances WHERE id = $1', [Number(ambulance_id)]);
       if (ambs.length > 0) targetAmbulance = ambs[0];
     }
 
     if (!targetAmbulance && driver_user_id) {
-      const ambQuery = db.exec(`SELECT * FROM ambulances WHERE driver_user_id = ${Number(driver_user_id)}`);
-      const ambs = formatQueryResult(ambQuery[0]);
+      const ambs = await dbQuery('SELECT * FROM ambulances WHERE driver_user_id = $1', [String(driver_user_id)]);
       if (ambs.length > 0) targetAmbulance = ambs[0];
     }
 
     if (!targetAmbulance && driver_name) {
-      const ambQuery = db.exec(`SELECT * FROM ambulances WHERE LOWER(driver_name) LIKE '%${driver_name.toLowerCase().trim()}%'`);
-      const ambs = formatQueryResult(ambQuery[0]);
+      const ambs = await dbQuery(
+        'SELECT * FROM ambulances WHERE LOWER(driver_name) LIKE $1 LIMIT 1',
+        [`%${driver_name.toLowerCase().trim()}%`]
+      );
       if (ambs.length > 0) targetAmbulance = ambs[0];
     }
 
     if (!targetAmbulance) {
-      const ambQuery = db.exec("SELECT * FROM ambulances WHERE status = 'AVAILABLE' ORDER BY id ASC LIMIT 1");
-      const ambs = formatQueryResult(ambQuery[0]);
+      const ambs = await dbQuery("SELECT * FROM ambulances WHERE status = 'AVAILABLE' ORDER BY id ASC LIMIT 1");
       if (ambs.length > 0) targetAmbulance = ambs[0];
     }
 
@@ -1053,23 +790,24 @@ apiRouter.post('/emergency/:id/accept', async (req: Request, res: Response) => {
     }
 
     const resolvedDriverUserId = driver_user_id || targetAmbulance.driver_user_id || null;
-    const now = new Date().toISOString();
     const actualDriverName = driver_name || targetAmbulance.driver_name;
 
-    // 3. Atomically assign driver and ambulance and update status to DRIVER_ACCEPTED
-    db.run(
-      "UPDATE emergency_requests SET driver_id = ?, ambulance_id = ?, status = 'DRIVER_ACCEPTED', accepted_at = COALESCE(accepted_at, ?), updated_at = ? WHERE id = ? AND status = 'WAITING_FOR_DRIVER' AND ambulance_id IS NULL",
-      [resolvedDriverUserId, targetAmbulance.id, now, now, id]
+    // 3. Atomically assign driver and ambulance in PostgreSQL
+    await dbQuery(
+      `UPDATE emergency_requests 
+       SET driver_id = $1, ambulance_id = $2, status = 'DRIVER_ACCEPTED', accepted_at = COALESCE(accepted_at, NOW()), updated_at = NOW() 
+       WHERE id = $3 AND status = 'WAITING_FOR_DRIVER' AND ambulance_id IS NULL`,
+      [resolvedDriverUserId ? String(resolvedDriverUserId) : null, targetAmbulance.id, id]
     );
 
-    // 4. Dynamic AI Route Optimization (Origin: Ambulance Base -> Destination: Patient Location)
+    // 4. Dynamic AI Route Optimization (Ambulance Base -> Patient Location)
     const originLoc = targetAmbulance.base_location || 'Emergency Dispatch Base';
     const destLoc = emergency.location || 'Patient Incident Location';
     const destCoords: [number, number] | undefined = (emergency.latitude && emergency.longitude)
-      ? [emergency.latitude, emergency.longitude]
+      ? [Number(emergency.latitude), Number(emergency.longitude)]
       : undefined;
     const originCoords: [number, number] | undefined = (targetAmbulance.current_latitude && targetAmbulance.current_longitude)
-      ? [targetAmbulance.current_latitude, targetAmbulance.current_longitude]
+      ? [Number(targetAmbulance.current_latitude), Number(targetAmbulance.current_longitude)]
       : (destCoords ? [destCoords[0] - 0.015, destCoords[1] - 0.012] : undefined);
 
     const routeOptResult = await optimizeRouteAsync(originLoc, destLoc, emergency.emergency_type || 'General', 0, originCoords, destCoords);
@@ -1078,20 +816,20 @@ apiRouter.post('/emergency/:id/accept', async (req: Request, res: Response) => {
     const recommendedRoute = routeOptResult.recommendedRoute;
     const recommendedHospital = hospitalOptResult.recommendedHospital;
 
-    // Save generated routes and parameters
-    db.run(
+    // Save routes into emergency record
+    await dbQuery(
       `UPDATE emergency_requests SET 
-        route_origin = ?,
-        route_destination = ?,
-        optimized_routes = ?,
-        selected_route_id = ?,
-        current_eta_minutes = ?,
-        current_distance_km = ?,
-        current_traffic = ?,
-        hospital_routes = ?,
-        selected_hospital = ?,
-        route_updated_at = ?
-       WHERE id = ?`,
+        route_origin = $1,
+        route_destination = $2,
+        optimized_routes = $3,
+        selected_route_id = $4,
+        current_eta_minutes = $5,
+        current_distance_km = $6,
+        current_traffic = $7,
+        hospital_routes = $8,
+        selected_hospital = $9,
+        route_updated_at = NOW()
+       WHERE id = $10`,
       [
         originLoc,
         destLoc,
@@ -1102,29 +840,28 @@ apiRouter.post('/emergency/:id/accept', async (req: Request, res: Response) => {
         recommendedRoute.traffic,
         JSON.stringify(hospitalOptResult.allHospitals),
         recommendedHospital.name,
-        now,
         id,
       ]
     );
 
     // 5. Update ambulance status to BUSY
-    db.run("UPDATE ambulances SET status = 'BUSY' WHERE id = ?", [targetAmbulance.id]);
+    await dbQuery("UPDATE ambulances SET status = 'BUSY' WHERE id = $1", [targetAmbulance.id]);
 
-    // 6. Add activity log with Route Optimization detail
-    db.run(
-      "INSERT INTO activity_logs (emergency_id, action, performed_by, timestamp) VALUES (?, ?, ?, ?)",
+    // 6. Activity log
+    await dbQuery(
+      `INSERT INTO activity_logs (emergency_id, action, performed_by, timestamp) 
+       VALUES ($1, $2, $3, NOW())`,
       [
         id,
         `Emergency accepted by driver ${actualDriverName} (Ambulance: ${targetAmbulance.vehicle_number}). AI Route Generated: ${recommendedRoute.name} (${recommendedRoute.distanceKm} km, ETA: ${recommendedRoute.estimatedMinutes} min, Traffic: ${recommendedRoute.traffic})`,
         actualDriverName,
-        now,
       ]
     );
 
-    // 1. Patient Notification: Exact user wording & driver/ambulance details with AI Route notice
+    // Notifications
     if (emergency.patient_id) {
-      createNotification(db, {
-        userId: Number(emergency.patient_id),
+      await createPgNotification({
+        userId: String(emergency.patient_id),
         role: 'patient',
         title: 'Ambulance Driver Assigned',
         message: `An ambulance driver has accepted your emergency request. Driver: ${actualDriverName} | Ambulance: ${targetAmbulance.vehicle_number} (${targetAmbulance.phone}). Following AI-optimized route (ETA: ~${recommendedRoute.estimatedMinutes} mins).`,
@@ -1133,10 +870,9 @@ apiRouter.post('/emergency/:id/accept', async (req: Request, res: Response) => {
       });
     }
 
-    // 2. Driver Acceptance Confirmation: Exact user wording
     if (resolvedDriverUserId) {
-      createNotification(db, {
-        userId: Number(resolvedDriverUserId),
+      await createPgNotification({
+        userId: String(resolvedDriverUserId),
         role: 'driver',
         title: 'Emergency Request Accepted',
         message: 'You have successfully accepted the emergency request. AI route optimization active.',
@@ -1145,28 +881,24 @@ apiRouter.post('/emergency/:id/accept', async (req: Request, res: Response) => {
       });
     }
 
-    // 3. Other Drivers Notification: Exact user wording
-    notifyRole(db, 'driver', {
+    await notifyPgRole('driver', {
       title: 'Emergency Request Claimed',
       message: 'This emergency request has been accepted by another driver.',
       notificationType: 'EMERGENCY_CLAIMED_BY_OTHER',
       emergencyRequestId: id,
-      excludeUserId: resolvedDriverUserId ? Number(resolvedDriverUserId) : null,
+      excludeUserId: resolvedDriverUserId ? String(resolvedDriverUserId) : null,
     });
 
-    // 4. Admin Notification
-    notifyRole(db, 'admin', {
+    await notifyPgRole('admin', {
       title: `Emergency Accepted #${id}`,
       message: `Emergency request #${id} accepted by driver ${actualDriverName} (Ambulance: ${targetAmbulance.vehicle_number}). AI Route: ${recommendedRoute.name} (ETA: ${recommendedRoute.estimatedMinutes} min).`,
       notificationType: 'ADMIN_EMERGENCY_ASSIGNED',
       emergencyRequestId: id,
     });
 
-    saveDb(db);
-
-    // 7. Fetch updated record
-    const fullQuery = db.exec(`
-      SELECT 
+    // 7. Refetch updated emergency record
+    const refetched = await dbQuery(
+      `SELECT 
         e.*,
         a.vehicle_number,
         COALESCE(u.name, a.driver_name) as driver_name,
@@ -1176,19 +908,19 @@ apiRouter.post('/emergency/:id/accept', async (req: Request, res: Response) => {
         a.status as ambulance_status
       FROM emergency_requests e
       LEFT JOIN ambulances a ON e.ambulance_id = a.id
-      LEFT JOIN users u ON e.driver_id = u.id
-      WHERE e.id = ${id}
-    `);
+      LEFT JOIN users u ON e.driver_id = u.id::text
+      WHERE e.id = $1`,
+      [id]
+    );
 
-    const updated = formatQueryResult(fullQuery[0]).map(parseEmergencyRecord);
-
-    if (updated && updated[0]) {
-      broadcastEmergencyAssigned(updated[0], targetAmbulance);
+    const updated = refetched.map(parseEmergencyRecord)[0];
+    if (updated) {
+      broadcastEmergencyAssigned(updated, targetAmbulance);
     }
 
     return res.json({
       message: `Emergency accepted by ${actualDriverName}! Ambulance ${targetAmbulance.vehicle_number} is dispatched with AI Route Optimization.`,
-      emergency: updated[0],
+      emergency: updated,
       ambulance: targetAmbulance,
       routeOptimization: routeOptResult,
       hospitalOptimization: hospitalOptResult,
@@ -1200,26 +932,10 @@ apiRouter.post('/emergency/:id/accept', async (req: Request, res: Response) => {
 });
 
 // GET /api/hospitals
-// Fetches all registered local emergency hospitals with their ward capacity status
+// Fetches all registered emergency hospitals with their ward capacity status
 apiRouter.get('/hospitals', async (req: Request, res: Response) => {
   try {
-    const pgPool = getPostgresPool();
-    if (pgPool) {
-      try {
-        const resPg = await pgPool.query('SELECT * FROM hospitals ORDER BY ward_capacity ASC, id ASC');
-        return res.json({ hospitals: resPg.rows });
-      } catch (pgErr: any) {
-        if (pgErr?.code === 'ECONNREFUSED' || pgErr?.code === 'ETIMEDOUT') {
-          disablePostgresPool(pgErr);
-        } else {
-          console.warn('[Hospitals] PostgreSQL query fallback:', pgErr?.message || pgErr);
-        }
-      }
-    }
-
-    const db = await getDb();
-    const result = db.exec('SELECT * FROM hospitals ORDER BY ward_capacity ASC, id ASC');
-    const hospitals = formatQueryResult(result[0]);
+    const hospitals = await dbQuery('SELECT * FROM hospitals ORDER BY ward_capacity ASC, id ASC');
     return res.json({ hospitals });
   } catch (error: any) {
     console.error('Fetch hospitals error:', error);
@@ -1233,15 +949,14 @@ apiRouter.patch('/hospitals/:id/capacity', async (req: Request, res: Response) =
   try {
     const { id } = req.params;
     const { ward_capacity, available_beds } = req.body;
-    const db = await getDb();
 
     const isNumeric = !isNaN(Number(id));
     const checkQuery = isNumeric
-      ? `SELECT * FROM hospitals WHERE id = ${Number(id)}`
-      : `SELECT * FROM hospitals WHERE name = '${id.replace(/'/g, "''")}'`;
+      ? 'SELECT * FROM hospitals WHERE id = $1'
+      : 'SELECT * FROM hospitals WHERE name = $1';
+    const checkParam = isNumeric ? Number(id) : id;
 
-    const checkResult = db.exec(checkQuery);
-    const existing = formatQueryResult(checkResult[0]);
+    const existing = await dbQuery(checkQuery, [checkParam]);
     if (existing.length === 0) {
       return res.status(404).json({ error: `Hospital with ID or Name '${id}' not found` });
     }
@@ -1255,31 +970,26 @@ apiRouter.patch('/hospitals/:id/capacity', async (req: Request, res: Response) =
       beds = Math.max(1, Math.floor((hosp.total_beds || 20) * 0.45) || 8);
     }
 
-    db.run(
-      `UPDATE hospitals SET ward_capacity = ?, available_beds = ?, updated_at = CURRENT_TIMESTAMP WHERE id = ?`,
+    await dbQuery(
+      'UPDATE hospitals SET ward_capacity = $1, available_beds = $2, updated_at = NOW() WHERE id = $3',
       [newStatus, beds, hosp.id]
     );
 
-    // Audit log
-    db.run(
-      `INSERT INTO activity_logs (emergency_id, action, performed_by, timestamp) VALUES (NULL, ?, 'Emergency Ward Coordinator / Admin', CURRENT_TIMESTAMP)`,
+    // Activity log
+    await dbQuery(
+      `INSERT INTO activity_logs (emergency_id, action, performed_by, timestamp) 
+       VALUES (NULL, $1, 'Emergency Ward Coordinator / Admin', NOW())`,
       [`Emergency Ward Capacity status changed: ${hosp.name} is now ${newStatus} (${beds} available beds)`]
     );
 
-    // Admin & Dispatch alert notification
-    db.run(
-      `INSERT INTO notifications (user_id, role, title, message, notification_type, is_read, created_at) VALUES
-      (3, 'admin', ?, ?, 'HOSPITAL_CAPACITY_UPDATE', 0, CURRENT_TIMESTAMP)`,
-      [
-        `Ward Capacity: ${hosp.name}`,
-        `Emergency Ward status is now ${newStatus}. Patient dispatch radar and live ambulance routing updated.`
-      ]
-    );
+    // Notification
+    await notifyPgRole('admin', {
+      title: `Ward Capacity: ${hosp.name}`,
+      message: `Emergency Ward status is now ${newStatus}. Patient dispatch radar and live ambulance routing updated.`,
+      notificationType: 'HOSPITAL_CAPACITY_UPDATE',
+    });
 
-    saveDb(db);
-
-    const updatedQuery = db.exec(`SELECT * FROM hospitals WHERE id = ${hosp.id}`);
-    const updatedHosp = formatQueryResult(updatedQuery[0])[0];
+    const updatedHosp = (await dbQuery('SELECT * FROM hospitals WHERE id = $1', [hosp.id]))[0];
 
     return res.json({
       message: `Emergency Ward Capacity for ${hosp.name} set to ${newStatus}`,
@@ -1296,15 +1006,13 @@ apiRouter.patch('/hospitals/:id/capacity', async (req: Request, res: Response) =
 apiRouter.post('/hospitals/:id/toggle-capacity', async (req: Request, res: Response) => {
   try {
     const { id } = req.params;
-    const db = await getDb();
-
     const isNumeric = !isNaN(Number(id));
     const checkQuery = isNumeric
-      ? `SELECT * FROM hospitals WHERE id = ${Number(id)}`
-      : `SELECT * FROM hospitals WHERE name = '${id.replace(/'/g, "''")}'`;
+      ? 'SELECT * FROM hospitals WHERE id = $1'
+      : 'SELECT * FROM hospitals WHERE name = $1';
+    const checkParam = isNumeric ? Number(id) : id;
 
-    const checkResult = db.exec(checkQuery);
-    const existing = formatQueryResult(checkResult[0]);
+    const existing = await dbQuery(checkQuery, [checkParam]);
     if (existing.length === 0) {
       return res.status(404).json({ error: `Hospital with ID or Name '${id}' not found` });
     }
@@ -1314,21 +1022,18 @@ apiRouter.post('/hospitals/:id/toggle-capacity', async (req: Request, res: Respo
     const nextStatus = currentStatus === 'AVAILABLE' ? 'FULL' : 'AVAILABLE';
     const nextBeds = nextStatus === 'FULL' ? 0 : Math.max(1, Math.floor((hosp.total_beds || 20) * 0.45) || 8);
 
-    db.run(
-      `UPDATE hospitals SET ward_capacity = ?, available_beds = ?, updated_at = CURRENT_TIMESTAMP WHERE id = ?`,
+    await dbQuery(
+      'UPDATE hospitals SET ward_capacity = $1, available_beds = $2, updated_at = NOW() WHERE id = $3',
       [nextStatus, nextBeds, hosp.id]
     );
 
-    // Audit log
-    db.run(
-      `INSERT INTO activity_logs (emergency_id, action, performed_by, timestamp) VALUES (NULL, ?, 'Emergency Ward Coordinator / Admin', CURRENT_TIMESTAMP)`,
+    await dbQuery(
+      `INSERT INTO activity_logs (emergency_id, action, performed_by, timestamp) 
+       VALUES (NULL, $1, 'Emergency Ward Coordinator / Admin', NOW())`,
       [`Emergency Ward Capacity toggled: ${hosp.name} is now ${nextStatus} (${nextBeds} beds)`]
     );
 
-    saveDb(db);
-
-    const updatedQuery = db.exec(`SELECT * FROM hospitals WHERE id = ${hosp.id}`);
-    const updatedHosp = formatQueryResult(updatedQuery[0])[0];
+    const updatedHosp = (await dbQuery('SELECT * FROM hospitals WHERE id = $1', [hosp.id]))[0];
 
     return res.json({
       message: `Emergency Ward Capacity for ${hosp.name} is now ${nextStatus}`,
@@ -1341,7 +1046,7 @@ apiRouter.post('/hospitals/:id/toggle-capacity', async (req: Request, res: Respo
 });
 
 // GET /api/nearby-hospitals
-// Searches real hospitals nearby coordinates and syncs with SQLite Emergency Ward Capacity
+// Searches real hospitals nearby coordinates and syncs with PostgreSQL Emergency Ward Capacity
 apiRouter.get('/nearby-hospitals', async (req: Request, res: Response) => {
   try {
     let lat = req.query.lat ? Number(req.query.lat) : NaN;
@@ -1350,11 +1055,10 @@ apiRouter.get('/nearby-hospitals', async (req: Request, res: Response) => {
     const radius = Number(req.query.radius || 10000);
 
     if (isNaN(lat) || isNaN(lng)) {
-      const db = await getDb();
-      const latest = db.exec(`SELECT latitude, longitude FROM emergency_requests WHERE latitude IS NOT NULL ORDER BY id DESC LIMIT 1`);
-      if (latest && latest[0] && latest[0].values && latest[0].values.length > 0) {
-        lat = Number(latest[0].values[0][0]);
-        lng = Number(latest[0].values[0][1]);
+      const latest = await dbQuery('SELECT latitude, longitude FROM emergency_requests WHERE latitude IS NOT NULL ORDER BY id DESC LIMIT 1');
+      if (latest.length > 0 && latest[0].latitude && latest[0].longitude) {
+        lat = Number(latest[0].latitude);
+        lng = Number(latest[0].longitude);
       }
     }
 
@@ -1363,9 +1067,7 @@ apiRouter.get('/nearby-hospitals', async (req: Request, res: Response) => {
     }
 
     const result = await searchRealNearbyHospitals(lat, lng, radius, emergencyType);
-    const db = await getDb();
-    const dbHospQuery = db.exec("SELECT * FROM hospitals");
-    const dbHospitals = formatQueryResult(dbHospQuery[0]);
+    const dbHospitals = await dbQuery('SELECT * FROM hospitals');
 
     const dbMapByName = new Map<string, any>();
     const dbMapById = new Map<string, any>();
@@ -1386,29 +1088,6 @@ apiRouter.get('/nearby-hospitals', async (req: Request, res: Response) => {
             availableEmergencyBeds: found.available_beds,
           };
         } else {
-          // Add newly discovered hospital to DB so Admin can manage its capacity
-          try {
-            const hLat = h.coordinates?.[0] || lat;
-            const hLng = h.coordinates?.[1] || lng;
-            db.run(
-              `INSERT OR IGNORE INTO hospitals (name, specialty, address, latitude, longitude, phone, ward_capacity, available_beds, total_beds, rating, type)
-               VALUES (?, ?, ?, ?, ?, ?, 'AVAILABLE', ?, 20, ?, ?)`,
-              [
-                h.name,
-                h.specialty || 'General Emergency Care',
-                h.address || 'Local Medical Hub',
-                hLat,
-                hLng,
-                h.phone || '+91 108 / 112 Emergency Help',
-                h.availableEmergencyBeds || 10,
-                h.rating || 4.5,
-                h.type || 'Emergency Hospital',
-              ]
-            );
-            saveDb(db);
-          } catch {
-            // safe ignore
-          }
           return {
             ...h,
             ward_capacity: h.ward_capacity || 'AVAILABLE',
@@ -1418,9 +1097,8 @@ apiRouter.get('/nearby-hospitals', async (req: Request, res: Response) => {
         }
       });
     } else if (dbHospitals.length > 0) {
-      // Return regional database hospitals sorted by distance
       const list = dbHospitals.map((h: any) => {
-        const dist = calculateGeoDistanceKm([lat, lng], [h.latitude, h.longitude]);
+        const dist = calculateGeoDistanceKm([lat, lng], [Number(h.latitude), Number(h.longitude)]);
         const traffic: 'Low' | 'Moderate' | 'Heavy' = dist > 6 ? 'Heavy' : (dist > 3 ? 'Moderate' : 'Low');
         const speed = traffic === 'Heavy' ? 20 : (traffic === 'Moderate' ? 32 : 44);
         const estMin = Math.max(3, Math.round((dist / speed) * 60));
@@ -1435,7 +1113,7 @@ apiRouter.get('/nearby-hospitals', async (req: Request, res: Response) => {
           availableEmergencyBeds: h.available_beds,
           isRecommended: false,
           recommendationReason: `Verified regional emergency facility (${dist} km). Ward Capacity: ${h.ward_capacity}`,
-          coordinates: [h.latitude, h.longitude] as [number, number],
+          coordinates: [Number(h.latitude), Number(h.longitude)] as [number, number],
           phone: h.phone,
           type: h.type,
           ward_capacity: h.ward_capacity,
@@ -1470,12 +1148,9 @@ apiRouter.post('/fleet/sync-location', async (req: Request, res: Response) => {
 
     const [lat, lng] = norm;
     setPrimaryLocationAnchor(lat, lng);
-    const db = await getDb();
 
-    // Base area name
     const shortArea = address ? address.split(',')[0].trim() : 'Local Emergency';
 
-    // Disperse available standby ambulances around user: 1.2km to 3.2km in 4 directions
     const offsets = [
       { latOffset: 0.012, lngOffset: 0.009, nameSuffix: 'North Dispatch Station' },
       { latOffset: -0.015, lngOffset: 0.012, nameSuffix: 'East Emergency Depot' },
@@ -1483,94 +1158,50 @@ apiRouter.post('/fleet/sync-location', async (req: Request, res: Response) => {
       { latOffset: 0.014, lngOffset: -0.011, nameSuffix: 'West Rapid Response Depot' },
     ];
 
-    const ambQuery = db.exec("SELECT * FROM ambulances ORDER BY id ASC");
-    const ambulances = formatQueryResult(ambQuery[0]);
+    const ambulances = await dbQuery('SELECT * FROM ambulances ORDER BY id ASC');
 
-    ambulances.forEach((amb: any, idx: number) => {
-      // Relocate standby ambulances that are currently AVAILABLE
+    for (let idx = 0; idx < ambulances.length; idx++) {
+      const amb = ambulances[idx];
       if (amb.status === 'AVAILABLE' || !amb.status) {
         const offset = offsets[idx % offsets.length];
         const newLat = parseFloat((lat + offset.latOffset).toFixed(5));
         const newLng = parseFloat((lng + offset.lngOffset).toFixed(5));
         const newBase = `${shortArea} ${offset.nameSuffix}`;
 
-        db.run(
-          "UPDATE ambulances SET current_latitude = ?, current_longitude = ?, base_location = ? WHERE id = ?",
+        await dbQuery(
+          'UPDATE ambulances SET current_latitude = $1, current_longitude = $2, base_location = $3 WHERE id = $4',
           [newLat, newLng, newBase, amb.id]
         );
       }
-    });
-
-    // Relocate regional hospitals around user if far away (> 80 km) so user's map has local hospitals
-    const hospQuery = db.exec("SELECT * FROM hospitals");
-    if (hospQuery.length > 0) {
-      const dbHospitals = formatQueryResult(hospQuery[0]);
-      const hospOffsets = [
-        { latOff: 0.016, lngOff: 0.018, area: 'Apex Central Medical Plaza' },
-        { latOff: -0.018, lngOff: 0.021, area: 'Cardiac & Trauma Corridor' },
-        { latOff: -0.014, lngOff: -0.022, area: 'City District Hospital' },
-        { latOff: 0.022, lngOff: -0.015, area: 'Super-Specialty Emergency Hub' },
-        { latOff: 0.028, lngOff: 0.011, area: 'Memorial Trauma Pavilion' },
-        { latOff: -0.025, lngOff: -0.012, area: 'Metro Critical Care Wing' },
-      ];
-      dbHospitals.forEach((h: any, idx: number) => {
-        const dist = calculateGeoDistanceKm([Number(h.latitude), Number(h.longitude)], [lat, lng]);
-        if (dist > 80) {
-          const off = hospOffsets[idx % hospOffsets.length];
-          const newHLat = parseFloat((lat + off.latOff).toFixed(5));
-          const newHLng = parseFloat((lng + off.lngOff).toFixed(5));
-          const newAddr = `${shortArea} ${off.area}`;
-          db.run(
-            "UPDATE hospitals SET latitude = ?, longitude = ?, address = ? WHERE id = ?",
-            [newHLat, newHLng, newAddr, h.id]
-          );
-        }
-      });
     }
 
-    // Check and repair active emergencies so Patient SOS is placed within a few km of the live ambulance/user
-    const emgQuery = db.exec("SELECT * FROM emergency_requests WHERE status IN ('WAITING_FOR_DRIVER', 'DRIVER_ACCEPTED', 'ON_THE_WAY', 'REACHED')");
-    if (emgQuery.length > 0) {
-      const emergencies = formatQueryResult(emgQuery[0]);
-      for (const emg of emergencies) {
-        const hasValid = isValidCoord(emg.latitude, emg.longitude);
-        const isFar = hasValid && calculateGeoDistanceKm([Number(emg.latitude), Number(emg.longitude)], [lat, lng]) > 80;
-        if (!hasValid || isFar) {
-          const patientLat = parseFloat((lat + 0.015).toFixed(5));
-          const patientLng = parseFloat((lng + 0.012).toFixed(5));
-          const opt = optimizeRoute(
-            `${shortArea} Dispatch Base`,
-            `${shortArea} Patient SOS Site`,
-            emg.emergency_type || 'General',
-            0,
-            [lat, lng],
-            [patientLat, patientLng]
-          );
-          const hospOpt = optimizeHospitals(`${shortArea} Patient SOS Site`, emg.emergency_type || 'General', 0, [patientLat, patientLng]);
-          db.run(
-            `UPDATE emergency_requests 
-             SET latitude = ?, longitude = ?, optimized_routes = ?, selected_route_id = ?, current_eta_minutes = ?, current_distance_km = ?, hospital_routes = ?, selected_hospital = ?
-             WHERE id = ?`,
-            [
-              patientLat,
-              patientLng,
-              JSON.stringify(opt.allRoutes),
-              opt.recommendedRoute.id,
-              opt.recommendedRoute.estimatedMinutes,
-              opt.recommendedRoute.distanceKm,
-              JSON.stringify(hospOpt.allHospitals),
-              hospOpt.recommendedHospital.name,
-              emg.id
-            ]
-          );
-        }
+    // Relocate regional hospitals around user if far away (> 80 km)
+    const dbHospitals = await dbQuery('SELECT * FROM hospitals');
+    const hospOffsets = [
+      { latOff: 0.016, lngOff: 0.018, area: 'Apex Central Medical Plaza' },
+      { latOff: -0.018, lngOff: 0.021, area: 'Cardiac & Trauma Corridor' },
+      { latOff: -0.014, lngOff: -0.022, area: 'City District Hospital' },
+      { latOff: 0.022, lngOff: -0.015, area: 'Super-Specialty Emergency Hub' },
+      { latOff: 0.028, lngOff: 0.011, area: 'Memorial Trauma Pavilion' },
+      { latOff: -0.025, lngOff: -0.012, area: 'Metro Critical Care Wing' },
+    ];
+
+    for (let idx = 0; idx < dbHospitals.length; idx++) {
+      const h = dbHospitals[idx];
+      const dist = calculateGeoDistanceKm([Number(h.latitude), Number(h.longitude)], [lat, lng]);
+      if (dist > 80) {
+        const off = hospOffsets[idx % hospOffsets.length];
+        const newHLat = parseFloat((lat + off.latOff).toFixed(5));
+        const newHLng = parseFloat((lng + off.lngOff).toFixed(5));
+        const newAddr = `${shortArea} ${off.area}`;
+        await dbQuery(
+          'UPDATE hospitals SET latitude = $1, longitude = $2, address = $3 WHERE id = $4',
+          [newHLat, newHLng, newAddr, h.id]
+        );
       }
     }
 
-    saveDb(db);
-
-    const refreshedQuery = db.exec("SELECT * FROM ambulances ORDER BY id ASC");
-    const updatedAmbulances = formatQueryResult(refreshedQuery[0]);
+    const updatedAmbulances = await dbQuery('SELECT * FROM ambulances ORDER BY id ASC');
 
     return res.json({
       message: `Ambulance fleet and emergency coordinates successfully synchronized around GPS (${lat.toFixed(4)}, ${lng.toFixed(4)}) in ${shortArea}.`,
@@ -1608,10 +1239,9 @@ apiRouter.get('/ip-location', async (req: Request, res: Response) => {
         }
       }
     } catch {
-      // Clean fallback if IP geolocation service is unavailable or timed out
+      // Clean fallback
     }
 
-    // Default regional emergency center fallback (Bengaluru Central Command)
     return res.json({
       latitude: 12.9716,
       longitude: 77.5946,
@@ -1626,7 +1256,7 @@ apiRouter.get('/ip-location', async (req: Request, res: Response) => {
 });
 
 // GET /api/reverse-geocode
-// Reverse-geocodes GPS coordinates to human-readable address to auto-populate SOS location
+// Reverse-geocodes GPS coordinates to human-readable address
 apiRouter.get('/reverse-geocode', async (req: Request, res: Response) => {
   try {
     const lat = parseFloat(req.query.lat as string);
@@ -1639,52 +1269,44 @@ apiRouter.get('/reverse-geocode', async (req: Request, res: Response) => {
     const googleKey = process.env.GOOGLE_PLACES_API_KEY || process.env.GOOGLE_MAPS_API_KEY || process.env.MAPS_API_KEY;
     if (googleKey) {
       try {
-        const gRes = await fetch(`https://maps.googleapis.com/maps/api/geocode/json?latlng=${lat},${lng}&key=${googleKey}`);
+        const gUrl = `https://maps.googleapis.com/maps/api/geocode/json?latlng=${lat},${lng}&key=${googleKey}`;
+        const gRes = await fetch(gUrl, { signal: AbortSignal.timeout(4000) });
         if (gRes.ok) {
           const gData = (await gRes.json()) as any;
-          if (gData.results && gData.results.length > 0) {
+          if (gData.status === 'OK' && gData.results && gData.results.length > 0) {
             return res.json({
-              formattedAddress: gData.results[0].formatted_address,
-              displayName: gData.results[0].formatted_address,
-              latitude: lat,
-              longitude: lng,
+              formatted_address: gData.results[0].formatted_address,
               source: 'google',
             });
           }
         }
-      } catch (err) {
-        console.warn('Google reverse geocode error:', err);
+      } catch {
+        // Fallback to OSM Nominatim
       }
     }
 
-    // Fallback: OpenStreetMap Nominatim
     try {
-      const nomRes = await fetch(
-        `https://nominatim.openstreetmap.org/reverse?format=json&lat=${lat}&lon=${lng}&zoom=18&addressdetails=1`,
-        { headers: { 'User-Agent': 'Arogyavahini-Emergency-App/1.0' } }
-      );
-      if (nomRes.ok) {
-        const nomData = (await nomRes.json()) as any;
-        if (nomData && nomData.display_name) {
+      const osmUrl = `https://nominatim.openstreetmap.org/reverse?format=json&lat=${lat}&lon=${lng}&zoom=18&addressdetails=1`;
+      const osmRes = await fetch(osmUrl, {
+        headers: { 'User-Agent': 'Arogyavahini-Emergency-Dispatch/2.0' },
+        signal: AbortSignal.timeout(4000),
+      });
+      if (osmRes.ok) {
+        const osmData = (await osmRes.json()) as any;
+        if (osmData && osmData.display_name) {
           return res.json({
-            formattedAddress: nomData.display_name,
-            displayName: nomData.display_name,
-            latitude: lat,
-            longitude: lng,
-            source: 'openstreetmap',
+            formatted_address: osmData.display_name,
+            source: 'osm',
           });
         }
       }
-    } catch (err) {
-      console.warn('Nominatim reverse geocode error:', err);
+    } catch {
+      // Coordinate fallback
     }
 
     return res.json({
-      formattedAddress: `Lat: ${lat.toFixed(5)}, Long: ${lng.toFixed(5)}`,
-      displayName: `Lat: ${lat.toFixed(5)}, Long: ${lng.toFixed(5)}`,
-      latitude: lat,
-      longitude: lng,
-      source: 'coords',
+      formatted_address: `Emergency Location (${lat.toFixed(4)}, ${lng.toFixed(4)})`,
+      source: 'coords_fallback',
     });
   } catch (error: any) {
     console.error('Reverse geocode error:', error);
@@ -1693,19 +1315,15 @@ apiRouter.get('/reverse-geocode', async (req: Request, res: Response) => {
 });
 
 // POST /api/emergency/:id/find-hospitals
-// Fetches real nearby hospitals centered around patient emergency coordinates (or driver current location)
 apiRouter.post('/emergency/:id/find-hospitals', async (req: Request, res: Response) => {
   try {
     const id = Number(req.params.id);
-    const db = await getDb();
-
-    const query = db.exec(`SELECT * FROM emergency_requests WHERE id = ${id}`);
-    const emergencies = formatQueryResult(query[0]).map(parseEmergencyRecord);
+    const emergencies = await dbQuery('SELECT * FROM emergency_requests WHERE id = $1', [id]);
     if (emergencies.length === 0) {
       return res.status(404).json({ error: 'Emergency request not found' });
     }
 
-    const emergency = emergencies[0];
+    const emergency = emergencies.map(parseEmergencyRecord)[0];
     const searchLat = req.body.latitude || emergency.latitude || emergency.driver_current_latitude;
     const searchLng = req.body.longitude || emergency.longitude || emergency.driver_current_longitude;
 
@@ -1720,33 +1338,29 @@ apiRouter.post('/emergency/:id/find-hospitals', async (req: Request, res: Respon
       emergency.emergency_type || 'General'
     );
 
-    const now = new Date().toISOString();
     const recommended = result.hospitals.find((h) => h.isRecommended) || result.hospitals[0];
 
-    db.run(
+    await dbQuery(
       `UPDATE emergency_requests SET
-        hospital_routes = ?,
-        selected_hospital = COALESCE(selected_hospital, ?),
-        updated_at = ?
-       WHERE id = ?`,
-      [JSON.stringify(result.hospitals), recommended?.name || null, now, id]
+        hospital_routes = $1,
+        selected_hospital = COALESCE(selected_hospital, $2),
+        updated_at = NOW()
+       WHERE id = $3`,
+      [JSON.stringify(result.hospitals), recommended?.name || null, id]
     );
 
-    // Add activity log
-    db.run(
-      "INSERT INTO activity_logs (emergency_id, action, performed_by, timestamp) VALUES (?, ?, ?, ?)",
+    await dbQuery(
+      `INSERT INTO activity_logs (emergency_id, action, performed_by, timestamp) 
+       VALUES ($1, $2, $3, NOW())`,
       [
         id,
         `Real Nearby Hospitals searched around (${Number(searchLat).toFixed(4)}, ${Number(searchLng).toFixed(4)}): Found ${result.hospitals.length} facilities (${result.source})`,
         emergency.driver_name || 'Driver / Dispatch',
-        now,
       ]
     );
 
-    saveDb(db);
-
-    const refetched = db.exec(`
-      SELECT 
+    const refetched = await dbQuery(
+      `SELECT 
         e.*,
         a.vehicle_number,
         COALESCE(u.name, a.driver_name) as driver_name,
@@ -1756,11 +1370,12 @@ apiRouter.post('/emergency/:id/find-hospitals', async (req: Request, res: Respon
         a.status as ambulance_status
       FROM emergency_requests e
       LEFT JOIN ambulances a ON e.ambulance_id = a.id
-      LEFT JOIN users u ON e.driver_id = u.id
-      WHERE e.id = ${id}
-    `);
+      LEFT JOIN users u ON e.driver_id = u.id::text
+      WHERE e.id = $1`,
+      [id]
+    );
 
-    const updated = formatQueryResult(refetched[0]).map(parseEmergencyRecord)[0];
+    const updated = refetched.map(parseEmergencyRecord)[0];
 
     return res.json({
       message: result.message,
@@ -1780,10 +1395,9 @@ apiRouter.post('/emergency/:id/navigate-to-hospital', async (req: Request, res: 
   try {
     const id = Number(req.params.id);
     const { hospitalName, hospitalCoords, driverCoords } = req.body;
-    const db = await getDb();
 
-    const query = db.exec(`
-      SELECT 
+    const emergencies = await dbQuery(
+      `SELECT 
         e.*,
         a.vehicle_number,
         COALESCE(u.name, a.driver_name) as driver_name,
@@ -1793,19 +1407,18 @@ apiRouter.post('/emergency/:id/navigate-to-hospital', async (req: Request, res: 
         a.status as ambulance_status
       FROM emergency_requests e
       LEFT JOIN ambulances a ON e.ambulance_id = a.id
-      LEFT JOIN users u ON e.driver_id = u.id
-      WHERE e.id = ${id}
-    `);
+      LEFT JOIN users u ON e.driver_id = u.id::text
+      WHERE e.id = $1`,
+      [id]
+    );
 
-    const emergencies = formatQueryResult(query[0]).map(parseEmergencyRecord);
     if (emergencies.length === 0) {
       return res.status(404).json({ error: 'Emergency request not found' });
     }
 
-    const emergency = emergencies[0];
+    const emergency = emergencies.map(parseEmergencyRecord)[0];
     const targetHospital = hospitalName || emergency.selected_hospital || 'Emergency Trauma Hospital';
     
-    // Origin is current ambulance GPS coords or patient coords
     const originLat = driverCoords?.latitude || emergency.driver_current_latitude || emergency.latitude;
     const originLng = driverCoords?.longitude || emergency.driver_current_longitude || emergency.longitude;
 
@@ -1819,7 +1432,6 @@ apiRouter.post('/emergency/:id/navigate-to-hospital', async (req: Request, res: 
       ? [hospitalCoords[0], hospitalCoords[1]]
       : [originLat + 0.018, originLng + 0.015];
 
-    // Compute Stage 2 Route Candidates
     const variationSeed = Math.floor(Math.random() * 1000) + 1;
     const routeOptResult = await optimizeRouteAsync(
       originLocation,
@@ -1831,22 +1443,21 @@ apiRouter.post('/emergency/:id/navigate-to-hospital', async (req: Request, res: 
     );
 
     const recommended = routeOptResult.recommendedRoute;
-    const now = new Date().toISOString();
 
-    db.run(
+    await dbQuery(
       `UPDATE emergency_requests SET
         navigation_stage = 'TO_HOSPITAL',
-        selected_hospital = ?,
-        route_origin = ?,
-        route_destination = ?,
-        optimized_routes = ?,
-        selected_route_id = ?,
-        current_eta_minutes = ?,
-        current_distance_km = ?,
-        current_traffic = ?,
-        route_updated_at = ?,
-        updated_at = ?
-       WHERE id = ?`,
+        selected_hospital = $1,
+        route_origin = $2,
+        route_destination = $3,
+        optimized_routes = $4,
+        selected_route_id = $5,
+        current_eta_minutes = $6,
+        current_distance_km = $7,
+        current_traffic = $8,
+        route_updated_at = NOW(),
+        updated_at = NOW()
+       WHERE id = $9`,
       [
         targetHospital,
         originLocation,
@@ -1856,39 +1467,50 @@ apiRouter.post('/emergency/:id/navigate-to-hospital', async (req: Request, res: 
         recommended.estimatedMinutes,
         recommended.distanceKm,
         recommended.traffic,
-        now,
-        now,
         id,
       ]
     );
 
-    // Add activity log
-    db.run(
-      "INSERT INTO activity_logs (emergency_id, action, performed_by, timestamp) VALUES (?, ?, ?, ?)",
+    await dbQuery(
+      `INSERT INTO activity_logs (emergency_id, action, performed_by, timestamp) 
+       VALUES ($1, $2, $3, NOW())`,
       [
         id,
-        `STAGE 2 NAVIGATION ACTIVATED: Transporting patient to ${targetHospital} (ETA: ${recommended.estimatedMinutes} mins, Distance: ${recommended.distanceKm} km)`,
-        emergency.driver_name || 'Driver / Paramedic',
-        now,
+        `Stage 2 Hospital Navigation Initiated towards ${targetHospital} via ${recommended.name} (${recommended.distanceKm} km, ETA: ${recommended.estimatedMinutes} min)`,
+        emergency.driver_name || 'Driver',
       ]
     );
 
-    // Notify patient
+    // Patient Notification
     if (emergency.patient_id) {
-      createNotification(db, {
-        userId: Number(emergency.patient_id),
+      await createPgNotification({
+        userId: String(emergency.patient_id),
         role: 'patient',
         title: 'En Route to Hospital',
-        message: `Ambulance is now navigating to ${targetHospital}. Estimated transit time: ~${recommended.estimatedMinutes} mins.`,
-        notificationType: 'ON_THE_WAY',
+        message: `Ambulance is now transporting patient towards ${targetHospital}. Estimated arrival: ~${recommended.estimatedMinutes} mins.`,
+        notificationType: 'EN_ROUTE_TO_HOSPITAL',
         emergencyRequestId: id,
       });
     }
 
-    saveDb(db);
+    await notifyPgRole('admin', {
+      title: `Hospital Transfer Active #${id}`,
+      message: `Unit is en route to ${targetHospital} with patient. AI Route: ${recommended.name} (ETA: ${recommended.estimatedMinutes} min).`,
+      notificationType: 'ADMIN_HOSPITAL_TRANSFER',
+      emergencyRequestId: id,
+    });
 
-    const refetched = db.exec(`
-      SELECT 
+    broadcastRouteUpdated(id, {
+      routeId: recommended.id,
+      distanceKm: recommended.distanceKm,
+      etaMinutes: recommended.estimatedMinutes,
+      traffic: recommended.traffic,
+      coordinates: recommended.coordinates,
+      waypoints: recommended.waypoints,
+    });
+
+    const refetched = await dbQuery(
+      `SELECT 
         e.*,
         a.vehicle_number,
         COALESCE(u.name, a.driver_name) as driver_name,
@@ -1898,11 +1520,12 @@ apiRouter.post('/emergency/:id/navigate-to-hospital', async (req: Request, res: 
         a.status as ambulance_status
       FROM emergency_requests e
       LEFT JOIN ambulances a ON e.ambulance_id = a.id
-      LEFT JOIN users u ON e.driver_id = u.id
-      WHERE e.id = ${id}
-    `);
+      LEFT JOIN users u ON e.driver_id = u.id::text
+      WHERE e.id = $1`,
+      [id]
+    );
 
-    const updated = formatQueryResult(refetched[0]).map(parseEmergencyRecord)[0];
+    const updated = refetched.map(parseEmergencyRecord)[0];
 
     return res.json({
       message: `Stage 2 Navigation active towards ${targetHospital}`,
@@ -1917,15 +1540,13 @@ apiRouter.post('/emergency/:id/navigate-to-hospital', async (req: Request, res: 
 });
 
 // POST /api/emergency/:id/recalculate-route
-// Driver clicks "Recalculate Route" or dynamic traffic changes occur
 apiRouter.post('/emergency/:id/recalculate-route', async (req: Request, res: Response) => {
   try {
     const id = Number(req.params.id);
     const { origin, destination, originLatitude, originLongitude, destLatitude, destLongitude, stage } = req.body;
-    const db = await getDb();
 
-    const query = db.exec(`
-      SELECT 
+    const emergencies = await dbQuery(
+      `SELECT 
         e.*,
         a.vehicle_number,
         COALESCE(u.name, a.driver_name) as driver_name,
@@ -1935,20 +1556,19 @@ apiRouter.post('/emergency/:id/recalculate-route', async (req: Request, res: Res
         a.status as ambulance_status
       FROM emergency_requests e
       LEFT JOIN ambulances a ON e.ambulance_id = a.id
-      LEFT JOIN users u ON e.driver_id = u.id
-      WHERE e.id = ${id}
-    `);
+      LEFT JOIN users u ON e.driver_id = u.id::text
+      WHERE e.id = $1`,
+      [id]
+    );
 
-    const emergencies = formatQueryResult(query[0]).map(parseEmergencyRecord);
     if (emergencies.length === 0) {
       return res.status(404).json({ error: 'Emergency request not found' });
     }
 
-    const emergency = emergencies[0];
+    const emergency = emergencies.map(parseEmergencyRecord)[0];
     const originLoc = origin || emergency.route_origin || (emergency.driver_current_latitude ? 'Driver Live Location' : (emergency.ambulance_base || 'Emergency Base'));
     const destLoc = destination || emergency.route_destination || emergency.location;
     
-    // Resolve origin and destination coordinates
     const originCoords: [number, number] | null = (originLatitude && originLongitude)
       ? [Number(originLatitude), Number(originLongitude)]
       : (emergency.driver_current_latitude && emergency.driver_current_longitude)
@@ -1961,7 +1581,6 @@ apiRouter.post('/emergency/:id/recalculate-route', async (req: Request, res: Res
         ? [Number(emergency.latitude), Number(emergency.longitude)]
         : null;
 
-    // Seed using timestamp for fresh live traffic simulation
     const variationSeed = Math.floor(Math.random() * 1000) + 1;
     const routeOptResult = await optimizeRouteAsync(
       originLoc,
@@ -1974,26 +1593,21 @@ apiRouter.post('/emergency/:id/recalculate-route', async (req: Request, res: Res
 
     const hospitalOptResult = await optimizeHospitalsAsync(destLoc, emergency.emergency_type || 'General', destCoords);
     const recommended = routeOptResult.recommendedRoute;
-    const now = new Date().toISOString();
     const activeStage = stage || emergency.navigation_stage || 'TO_PATIENT';
 
-    db.run(
-      `UPDATE emergency_requests SET 
-        route_origin = ?,
-        route_destination = ?,
-        optimized_routes = ?,
-        selected_route_id = ?,
-        current_eta_minutes = ?,
-        current_distance_km = ?,
-        current_traffic = ?,
-        hospital_routes = ?,
-        navigation_stage = ?,
-        route_updated_at = ?,
-        updated_at = ?
-       WHERE id = ?`,
+    await dbQuery(
+      `UPDATE emergency_requests SET
+        optimized_routes = $1,
+        selected_route_id = $2,
+        current_eta_minutes = $3,
+        current_distance_km = $4,
+        current_traffic = $5,
+        hospital_routes = $6,
+        navigation_stage = $7,
+        route_updated_at = NOW(),
+        updated_at = NOW()
+       WHERE id = $8`,
       [
-        originLoc,
-        destLoc,
         JSON.stringify(routeOptResult.allRoutes),
         recommended.id,
         recommended.estimatedMinutes,
@@ -2001,27 +1615,31 @@ apiRouter.post('/emergency/:id/recalculate-route', async (req: Request, res: Res
         recommended.traffic,
         JSON.stringify(hospitalOptResult.allHospitals),
         activeStage,
-        now,
-        now,
         id,
       ]
     );
 
-    // Add activity log
-    db.run(
-      "INSERT INTO activity_logs (emergency_id, action, performed_by, timestamp) VALUES (?, ?, ?, ?)",
+    await dbQuery(
+      `INSERT INTO activity_logs (emergency_id, action, performed_by, timestamp) 
+       VALUES ($1, $2, $3, NOW())`,
       [
         id,
-        `AI Route Recalculated: ${recommended.name} (ETA: ${recommended.estimatedMinutes} mins, Distance: ${recommended.distanceKm} km, Traffic: ${recommended.traffic})`,
-        emergency.driver_name || 'Driver',
-        now,
+        `AI Route Recalculated: ${recommended.name} (${recommended.distanceKm} km, ETA: ${recommended.estimatedMinutes} min, Traffic: ${recommended.traffic})`,
+        emergency.driver_name || 'Driver / System',
       ]
     );
 
-    saveDb(db);
+    broadcastRouteUpdated(id, {
+      routeId: recommended.id,
+      distanceKm: recommended.distanceKm,
+      etaMinutes: recommended.estimatedMinutes,
+      traffic: recommended.traffic,
+      coordinates: recommended.coordinates,
+      waypoints: recommended.waypoints,
+    });
 
-    const refetched = db.exec(`
-      SELECT 
+    const refetched = await dbQuery(
+      `SELECT 
         e.*,
         a.vehicle_number,
         COALESCE(u.name, a.driver_name) as driver_name,
@@ -2031,26 +1649,15 @@ apiRouter.post('/emergency/:id/recalculate-route', async (req: Request, res: Res
         a.status as ambulance_status
       FROM emergency_requests e
       LEFT JOIN ambulances a ON e.ambulance_id = a.id
-      LEFT JOIN users u ON e.driver_id = u.id
-      WHERE e.id = ${id}
-    `);
+      LEFT JOIN users u ON e.driver_id = u.id::text
+      WHERE e.id = $1`,
+      [id]
+    );
 
-    const updated = formatQueryResult(refetched[0]).map(parseEmergencyRecord)[0];
-
-    if (recommended) {
-      broadcastRouteUpdated(
-        id,
-        recommended.id,
-        recommended.distanceKm,
-        recommended.estimatedMinutes,
-        recommended.traffic,
-        recommended.coordinates || [],
-        recommended.waypoints || []
-      );
-    }
+    const updated = refetched.map(parseEmergencyRecord)[0];
 
     return res.json({
-      message: 'AI route updated based on live GPS and traffic conditions.',
+      message: 'AI Route recalculated based on live conditions',
       emergency: updated,
       routeOptimization: routeOptResult,
       hospitalOptimization: hospitalOptResult,
@@ -2072,43 +1679,34 @@ apiRouter.post('/emergency/:id/driver-location', async (req: Request, res: Respo
       return res.status(400).json({ error: 'Latitude and Longitude are required' });
     }
 
-    const db = await getDb();
-    const now = new Date().toISOString();
-
-    const query = db.exec(`SELECT * FROM emergency_requests WHERE id = ${id}`);
-    const emergencies = formatQueryResult(query[0]).map(parseEmergencyRecord);
+    const emergencies = await dbQuery('SELECT * FROM emergency_requests WHERE id = $1', [id]);
     if (emergencies.length === 0) {
       return res.status(404).json({ error: 'Emergency not found' });
     }
 
     const emergency = emergencies[0];
 
-    // Update emergency request driver coordinates
-    db.run(
+    await dbQuery(
       `UPDATE emergency_requests SET
-        driver_current_latitude = ?,
-        driver_current_longitude = ?,
-        driver_accuracy = ?,
-        updated_at = ?
-       WHERE id = ?`,
-      [Number(latitude), Number(longitude), accuracy ? Number(accuracy) : null, now, id]
+        driver_current_latitude = $1,
+        driver_current_longitude = $2,
+        driver_accuracy = $3,
+        updated_at = NOW()
+       WHERE id = $4`,
+      [Number(latitude), Number(longitude), accuracy ? Number(accuracy) : null, id]
     );
 
-    // Update ambulance table if linked
     if (emergency.ambulance_id) {
-      db.run(
+      await dbQuery(
         `UPDATE ambulances SET
-          current_latitude = ?,
-          current_longitude = ?,
-          last_gps_update = ?
-         WHERE id = ?`,
-        [Number(latitude), Number(longitude), now, emergency.ambulance_id]
+          current_latitude = $1,
+          current_longitude = $2,
+          last_gps_update = NOW()
+         WHERE id = $3`,
+        [Number(latitude), Number(longitude), emergency.ambulance_id]
       );
     }
 
-    saveDb(db);
-
-    // Broadcast real-time location to Patient, Admin, and Drivers over Socket.IO
     broadcastAmbulanceLocation({
       ambulanceId: emergency.ambulance_id || 1,
       emergencyId: id,
@@ -2128,7 +1726,7 @@ apiRouter.post('/emergency/:id/driver-location', async (req: Request, res: Respo
         latitude: Number(latitude),
         longitude: Number(longitude),
         accuracy: accuracy ? Number(accuracy) : null,
-        updated_at: now,
+        updated_at: new Date().toISOString(),
       },
     });
   } catch (error: any) {
@@ -2138,7 +1736,6 @@ apiRouter.post('/emergency/:id/driver-location', async (req: Request, res: Respo
 });
 
 // POST /api/emergency/:id/select-route
-// Driver selects a specific route from the generated candidates
 apiRouter.post('/emergency/:id/select-route', async (req: Request, res: Response) => {
   try {
     const id = Number(req.params.id);
@@ -2148,15 +1745,12 @@ apiRouter.post('/emergency/:id/select-route', async (req: Request, res: Response
       return res.status(400).json({ error: 'Route ID is required' });
     }
 
-    const db = await getDb();
-    const query = db.exec(`SELECT * FROM emergency_requests WHERE id = ${id}`);
-    const emergencies = formatQueryResult(query[0]).map(parseEmergencyRecord);
-
+    const emergencies = await dbQuery('SELECT * FROM emergency_requests WHERE id = $1', [id]);
     if (emergencies.length === 0) {
       return res.status(404).json({ error: 'Emergency request not found' });
     }
 
-    const emergency = emergencies[0];
+    const emergency = emergencies.map(parseEmergencyRecord)[0];
     const allRoutes: any[] = emergency.optimized_routes || [];
     const targetRoute = allRoutes.find((r) => r.id === routeId);
 
@@ -2164,42 +1758,35 @@ apiRouter.post('/emergency/:id/select-route', async (req: Request, res: Response
       return res.status(400).json({ error: 'Selected route option not found among generated candidates.' });
     }
 
-    const now = new Date().toISOString();
-    db.run(
+    await dbQuery(
       `UPDATE emergency_requests SET 
-        selected_route_id = ?,
-        current_eta_minutes = ?,
-        current_distance_km = ?,
-        current_traffic = ?,
-        route_updated_at = ?,
-        updated_at = ?
-       WHERE id = ?`,
+        selected_route_id = $1,
+        current_eta_minutes = $2,
+        current_distance_km = $3,
+        current_traffic = $4,
+        route_updated_at = NOW(),
+        updated_at = NOW()
+       WHERE id = $5`,
       [
         targetRoute.id,
         targetRoute.estimatedMinutes,
         targetRoute.distanceKm,
         targetRoute.traffic,
-        now,
-        now,
         id,
       ]
     );
 
-    // Add activity log
-    db.run(
-      "INSERT INTO activity_logs (emergency_id, action, performed_by, timestamp) VALUES (?, ?, ?, ?)",
+    await dbQuery(
+      `INSERT INTO activity_logs (emergency_id, action, performed_by, timestamp) 
+       VALUES ($1, $2, 'Driver', NOW())`,
       [
         id,
         `Driver selected navigation route: ${targetRoute.name} (${targetRoute.distanceKm} km, ETA: ${targetRoute.estimatedMinutes} min, Traffic: ${targetRoute.traffic})`,
-        'Driver',
-        now,
       ]
     );
 
-    saveDb(db);
-
-    const refetched = db.exec(`
-      SELECT 
+    const refetched = await dbQuery(
+      `SELECT 
         e.*,
         a.vehicle_number,
         COALESCE(u.name, a.driver_name) as driver_name,
@@ -2209,11 +1796,12 @@ apiRouter.post('/emergency/:id/select-route', async (req: Request, res: Response
         a.status as ambulance_status
       FROM emergency_requests e
       LEFT JOIN ambulances a ON e.ambulance_id = a.id
-      LEFT JOIN users u ON e.driver_id = u.id
-      WHERE e.id = ${id}
-    `);
+      LEFT JOIN users u ON e.driver_id = u.id::text
+      WHERE e.id = $1`,
+      [id]
+    );
 
-    const updated = formatQueryResult(refetched[0]).map(parseEmergencyRecord)[0];
+    const updated = refetched.map(parseEmergencyRecord)[0];
 
     return res.json({
       message: `Switched to ${targetRoute.name}`,
@@ -2227,14 +1815,11 @@ apiRouter.post('/emergency/:id/select-route', async (req: Request, res: Response
 });
 
 // POST /api/emergency/:id/start-navigation
-// Driver starts turn-by-turn navigation
 apiRouter.post('/emergency/:id/start-navigation', async (req: Request, res: Response) => {
   try {
     const id = Number(req.params.id);
-    const db = await getDb();
-
-    const query = db.exec(`
-      SELECT 
+    const emergencies = await dbQuery(
+      `SELECT 
         e.*,
         a.vehicle_number,
         COALESCE(u.name, a.driver_name) as driver_name,
@@ -2244,42 +1829,39 @@ apiRouter.post('/emergency/:id/start-navigation', async (req: Request, res: Resp
         a.status as ambulance_status
       FROM emergency_requests e
       LEFT JOIN ambulances a ON e.ambulance_id = a.id
-      LEFT JOIN users u ON e.driver_id = u.id
-      WHERE e.id = ${id}
-    `);
+      LEFT JOIN users u ON e.driver_id = u.id::text
+      WHERE e.id = $1`,
+      [id]
+    );
 
-    const emergencies = formatQueryResult(query[0]).map(parseEmergencyRecord);
     if (emergencies.length === 0) {
       return res.status(404).json({ error: 'Emergency request not found' });
     }
 
-    const emergency = emergencies[0];
-    const now = new Date().toISOString();
+    const emergency = emergencies.map(parseEmergencyRecord)[0];
 
-    db.run(
-      "UPDATE emergency_requests SET status = 'ON_THE_WAY', navigation_started = 1, updated_at = ? WHERE id = ?",
-      [now, id]
+    await dbQuery(
+      "UPDATE emergency_requests SET status = 'ON_THE_WAY', navigation_started = 1, updated_at = NOW() WHERE id = $1",
+      [id]
     );
 
     if (emergency.ambulance_id) {
-      db.run("UPDATE ambulances SET status = 'BUSY' WHERE id = ?", [emergency.ambulance_id]);
+      await dbQuery("UPDATE ambulances SET status = 'BUSY' WHERE id = $1", [emergency.ambulance_id]);
     }
 
-    // Add activity log
-    db.run(
-      "INSERT INTO activity_logs (emergency_id, action, performed_by, timestamp) VALUES (?, ?, ?, ?)",
+    await dbQuery(
+      `INSERT INTO activity_logs (emergency_id, action, performed_by, timestamp) 
+       VALUES ($1, $2, $3, NOW())`,
       [
         id,
         `Ambulance started navigation with sirens active towards ${emergency.location}`,
         emergency.driver_name || 'Driver',
-        now,
       ]
     );
 
-    // Patient notification
     if (emergency.patient_id) {
-      createNotification(db, {
-        userId: Number(emergency.patient_id),
+      await createPgNotification({
+        userId: String(emergency.patient_id),
         role: 'patient',
         title: 'Ambulance On The Way',
         message: `Your ambulance is following an AI-optimized route to reach you. Estimated arrival: ~${emergency.current_eta_minutes || 8} mins.`,
@@ -2288,18 +1870,15 @@ apiRouter.post('/emergency/:id/start-navigation', async (req: Request, res: Resp
       });
     }
 
-    // Admin notification
-    notifyRole(db, 'admin', {
+    await notifyPgRole('admin', {
       title: `Navigation Active #${id}`,
       message: `Ambulance ${emergency.vehicle_number || ''} started navigation to ${emergency.location}. ETA: ${emergency.current_eta_minutes || 8} mins.`,
       notificationType: 'ADMIN_STATUS_UPDATE',
       emergencyRequestId: id,
     });
 
-    saveDb(db);
-
-    const refetched = db.exec(`
-      SELECT 
+    const refetched = await dbQuery(
+      `SELECT 
         e.*,
         a.vehicle_number,
         COALESCE(u.name, a.driver_name) as driver_name,
@@ -2309,11 +1888,12 @@ apiRouter.post('/emergency/:id/start-navigation', async (req: Request, res: Resp
         a.status as ambulance_status
       FROM emergency_requests e
       LEFT JOIN ambulances a ON e.ambulance_id = a.id
-      LEFT JOIN users u ON e.driver_id = u.id
-      WHERE e.id = ${id}
-    `);
+      LEFT JOIN users u ON e.driver_id = u.id::text
+      WHERE e.id = $1`,
+      [id]
+    );
 
-    const updated = formatQueryResult(refetched[0]).map(parseEmergencyRecord)[0];
+    const updated = refetched.map(parseEmergencyRecord)[0];
 
     return res.json({
       message: 'Navigation started successfully. Sirens & green corridor active.',
@@ -2326,47 +1906,33 @@ apiRouter.post('/emergency/:id/start-navigation', async (req: Request, res: Resp
 });
 
 // POST /api/emergency/:id/select-hospital
-// Selects and sets hospital destination for hospital transit stage
 apiRouter.post('/emergency/:id/select-hospital', async (req: Request, res: Response) => {
   try {
     const id = Number(req.params.id);
-    const { hospitalName, hospitalId } = req.body;
+    const { hospitalName } = req.body;
 
     if (!hospitalName) {
       return res.status(400).json({ error: 'Hospital name is required' });
     }
 
-    const db = await getDb();
-    const query = db.exec(`SELECT * FROM emergency_requests WHERE id = ${id}`);
-    const emergencies = formatQueryResult(query[0]).map(parseEmergencyRecord);
-
+    const emergencies = await dbQuery('SELECT * FROM emergency_requests WHERE id = $1', [id]);
     if (emergencies.length === 0) {
       return res.status(404).json({ error: 'Emergency request not found' });
     }
 
-    const emergency = emergencies[0];
-    const now = new Date().toISOString();
-
-    db.run(
-      "UPDATE emergency_requests SET selected_hospital = ?, updated_at = ? WHERE id = ?",
-      [hospitalName, now, id]
+    await dbQuery(
+      'UPDATE emergency_requests SET selected_hospital = $1, updated_at = NOW() WHERE id = $2',
+      [hospitalName, id]
     );
 
-    // Add activity log
-    db.run(
-      "INSERT INTO activity_logs (emergency_id, action, performed_by, timestamp) VALUES (?, ?, ?, ?)",
-      [
-        id,
-        `Hospital destination selected: ${hospitalName}`,
-        'Driver / Paramedic',
-        now,
-      ]
+    await dbQuery(
+      `INSERT INTO activity_logs (emergency_id, action, performed_by, timestamp) 
+       VALUES ($1, $2, 'Driver / Paramedic', NOW())`,
+      [id, `Hospital destination selected: ${hospitalName}`]
     );
 
-    saveDb(db);
-
-    const refetched = db.exec(`
-      SELECT 
+    const refetched = await dbQuery(
+      `SELECT 
         e.*,
         a.vehicle_number,
         COALESCE(u.name, a.driver_name) as driver_name,
@@ -2376,11 +1942,12 @@ apiRouter.post('/emergency/:id/select-hospital', async (req: Request, res: Respo
         a.status as ambulance_status
       FROM emergency_requests e
       LEFT JOIN ambulances a ON e.ambulance_id = a.id
-      LEFT JOIN users u ON e.driver_id = u.id
-      WHERE e.id = ${id}
-    `);
+      LEFT JOIN users u ON e.driver_id = u.id::text
+      WHERE e.id = $1`,
+      [id]
+    );
 
-    const updated = formatQueryResult(refetched[0]).map(parseEmergencyRecord)[0];
+    const updated = refetched.map(parseEmergencyRecord)[0];
 
     return res.json({
       message: `Hospital destination set to ${hospitalName}`,
@@ -2397,7 +1964,6 @@ apiRouter.post('/emergency/:id/select-hospital', async (req: Request, res: Respo
 apiRouter.get('/emergency', async (req: Request, res: Response) => {
   try {
     const { patient_id, ambulance_id, status } = req.query;
-    const db = await getDb();
 
     let sql = `
       SELECT 
@@ -2410,24 +1976,27 @@ apiRouter.get('/emergency', async (req: Request, res: Response) => {
         a.status as ambulance_status
       FROM emergency_requests e
       LEFT JOIN ambulances a ON e.ambulance_id = a.id
-      LEFT JOIN users u ON e.driver_id = u.id
+      LEFT JOIN users u ON e.driver_id = u.id::text
       WHERE 1=1
     `;
+    const params: any[] = [];
 
     if (patient_id) {
-      sql += ` AND e.patient_id = ${Number(patient_id)}`;
+      params.push(String(patient_id));
+      sql += ` AND e.patient_id = $${params.length}`;
     }
     if (ambulance_id) {
-      sql += ` AND e.ambulance_id = ${Number(ambulance_id)}`;
+      params.push(Number(ambulance_id));
+      sql += ` AND e.ambulance_id = $${params.length}`;
     }
     if (status) {
-      sql += ` AND e.status = '${status}'`;
+      params.push(String(status));
+      sql += ` AND e.status = $${params.length}`;
     }
 
-    sql += ` ORDER BY e.id DESC`;
+    sql += ' ORDER BY e.id DESC';
 
-    const query = db.exec(sql);
-    const emergencies = formatQueryResult(query[0]).map(parseEmergencyRecord);
+    const emergencies = (await dbQuery(sql, params)).map(parseEmergencyRecord);
 
     return res.json({
       count: emergencies.length,
@@ -2440,11 +2009,9 @@ apiRouter.get('/emergency', async (req: Request, res: Response) => {
 });
 
 // GET /api/emergency/in-transit-er
-// Returns all incoming ambulance transfers with live vitals for receiving hospital ER dashboards
 apiRouter.get('/emergency/in-transit-er', async (req: Request, res: Response) => {
   try {
-    const db = await getDb();
-    const query = db.exec(`
+    const query = await dbQuery(`
       SELECT 
         e.*,
         a.vehicle_number,
@@ -2453,7 +2020,7 @@ apiRouter.get('/emergency/in-transit-er', async (req: Request, res: Response) =>
         a.type as ambulance_type
       FROM emergency_requests e
       LEFT JOIN ambulances a ON e.ambulance_id = a.id
-      LEFT JOIN users u ON e.driver_id = u.id
+      LEFT JOIN users u ON e.driver_id = u.id::text
       WHERE e.status IN ('ON_THE_WAY', 'REACHED', 'TRANSFERRING_TO_HOSPITAL')
       ORDER BY 
         CASE 
@@ -2463,7 +2030,7 @@ apiRouter.get('/emergency/in-transit-er', async (req: Request, res: Response) =>
         END,
         e.created_at DESC
     `);
-    const results = formatQueryResult(query[0]).map(parseEmergencyRecord);
+    const results = query.map(parseEmergencyRecord);
     return res.json({
       count: results.length,
       incoming_transfers: results,
@@ -2481,10 +2048,9 @@ apiRouter.get('/emergency/:id', async (req: Request, res: Response) => {
     if (!id || isNaN(id)) {
       return res.status(400).json({ error: 'Valid numeric emergency ID is required' });
     }
-    const db = await getDb();
 
-    const query = db.exec(`
-      SELECT 
+    const emergencies = await dbQuery(
+      `SELECT 
         e.*,
         a.vehicle_number,
         COALESCE(u.name, a.driver_name) as driver_name,
@@ -2494,21 +2060,22 @@ apiRouter.get('/emergency/:id', async (req: Request, res: Response) => {
         a.status as ambulance_status
       FROM emergency_requests e
       LEFT JOIN ambulances a ON e.ambulance_id = a.id
-      LEFT JOIN users u ON e.driver_id = u.id
-      WHERE e.id = ${id}
-    `);
+      LEFT JOIN users u ON e.driver_id = u.id::text
+      WHERE e.id = $1`,
+      [id]
+    );
 
-    const emergencies = formatQueryResult(query[0]).map(parseEmergencyRecord);
     if (emergencies.length === 0) {
       return res.status(404).json({ error: 'Emergency request not found' });
     }
 
-    // Fetch activity logs
-    const logQuery = db.exec(`SELECT * FROM activity_logs WHERE emergency_id = ${id} ORDER BY id ASC`);
-    const logs = formatQueryResult(logQuery[0]);
+    const logs = await dbQuery(
+      'SELECT * FROM activity_logs WHERE emergency_id = $1 ORDER BY id ASC',
+      [id]
+    );
 
     return res.json({
-      emergency: emergencies[0],
+      emergency: emergencies.map(parseEmergencyRecord)[0],
       logs,
     });
   } catch (error: any) {
@@ -2518,14 +2085,12 @@ apiRouter.get('/emergency/:id', async (req: Request, res: Response) => {
 });
 
 // GET /api/emergency/:id/report
-// Generates a comprehensive clinical and dispatch report for completed emergencies
 apiRouter.get('/emergency/:id/report', async (req: Request, res: Response) => {
   try {
     const id = Number(req.params.id);
-    const db = await getDb();
 
-    const query = db.exec(`
-      SELECT 
+    const emergencies = await dbQuery(
+      `SELECT 
         e.*,
         a.vehicle_number,
         COALESCE(u.name, a.driver_name) as driver_name,
@@ -2538,30 +2103,28 @@ apiRouter.get('/emergency/:id/report', async (req: Request, res: Response) => {
         pu.email as patient_email
       FROM emergency_requests e
       LEFT JOIN ambulances a ON e.ambulance_id = a.id
-      LEFT JOIN users u ON e.driver_id = u.id
-      LEFT JOIN users pu ON e.patient_id = pu.id
-      WHERE e.id = ${id}
-    `);
+      LEFT JOIN users u ON e.driver_id = u.id::text
+      LEFT JOIN users pu ON e.patient_id = pu.id::text
+      WHERE e.id = $1`,
+      [id]
+    );
 
-    const emergencies = formatQueryResult(query[0]).map(parseEmergencyRecord);
     if (emergencies.length === 0) {
       return res.status(404).json({ error: 'Emergency request not found' });
     }
 
-    const emergency = emergencies[0];
+    const emergency = emergencies.map(parseEmergencyRecord)[0];
+    const logs = await dbQuery(
+      'SELECT * FROM activity_logs WHERE emergency_id = $1 ORDER BY id ASC',
+      [id]
+    );
 
-    // Fetch activity logs
-    const logQuery = db.exec(`SELECT * FROM activity_logs WHERE emergency_id = ${id} ORDER BY id ASC`);
-    const logs = formatQueryResult(logQuery[0]);
-
-    // Parse dates and fallback if accepted_at / completed_at were not stored directly
     const acceptedLog = logs.find((l: any) => l.action && l.action.toLowerCase().includes('accepted'));
     const completedLog = logs.find((l: any) => l.action && (l.action.toLowerCase().includes('completed') || l.action.toLowerCase().includes('resolved')));
 
     const acceptedAt = emergency.accepted_at || acceptedLog?.timestamp || emergency.created_at;
     const completedAt = emergency.completed_at || completedLog?.timestamp || (emergency.status === 'COMPLETED' ? emergency.updated_at : null);
 
-    // Calculate response times
     let responseTimeMinutes = 0;
     if (acceptedAt && emergency.created_at) {
       const diffMs = new Date(acceptedAt).getTime() - new Date(emergency.created_at).getTime();
@@ -2573,7 +2136,6 @@ apiRouter.get('/emergency/:id/report', async (req: Request, res: Response) => {
       totalMissionDurationMinutes = Math.max(1, Math.round(diffMs / 60000));
     }
 
-    // Selected route
     const routes: any[] = emergency.optimized_routes || [];
     const selectedRoute = routes.find((r: any) => r.id === emergency.selected_route_id) || routes[0] || null;
 
@@ -2607,7 +2169,7 @@ apiRouter.get('/emergency/:id/report', async (req: Request, res: Response) => {
       pickupLocation: {
         address: emergency.location,
         coordinates: (emergency.latitude && emergency.longitude)
-          ? { latitude: emergency.latitude, longitude: emergency.longitude }
+          ? { latitude: Number(emergency.latitude), longitude: Number(emergency.longitude) }
           : null,
       },
       destinationLocation: {
@@ -2647,7 +2209,6 @@ apiRouter.get('/emergency/:id/report', async (req: Request, res: Response) => {
 });
 
 // PUT /api/emergency/:id/status
-// Emergency status flow: WAITING_FOR_DRIVER -> DRIVER_ACCEPTED -> ON_THE_WAY -> REACHED -> COMPLETED
 apiRouter.put('/emergency/:id/status', async (req: Request, res: Response) => {
   try {
     const id = Number(req.params.id);
@@ -2658,51 +2219,49 @@ apiRouter.put('/emergency/:id/status', async (req: Request, res: Response) => {
       return res.status(400).json({ error: `Invalid status. Must be one of: ${allowedStatuses.join(', ')}` });
     }
 
-    const db = await getDb();
-
-    // Check if emergency exists
-    const checkQuery = db.exec(`SELECT * FROM emergency_requests WHERE id = ${id}`);
-    const requests = formatQueryResult(checkQuery[0]);
-
+    const requests = await dbQuery('SELECT * FROM emergency_requests WHERE id = $1', [id]);
     if (requests.length === 0) {
       return res.status(404).json({ error: 'Emergency request not found' });
     }
 
     const currentRequest = requests[0];
 
-    // Ownership check: If a driver tries to update an emergency not assigned to their ambulance
+    // Ownership check
     if (driver_ambulance_id && currentRequest.ambulance_id && currentRequest.ambulance_id !== Number(driver_ambulance_id)) {
       return res.status(403).json({ error: 'You cannot update an emergency assigned to a different ambulance.' });
     }
 
-    const now = new Date().toISOString();
-
-    // Update emergency request status with appropriate timestamps
     if (status === 'COMPLETED') {
-      db.run("UPDATE emergency_requests SET status = ?, completed_at = COALESCE(completed_at, ?), updated_at = ? WHERE id = ?", [status, now, now, id]);
+      await dbQuery(
+        'UPDATE emergency_requests SET status = $1, completed_at = COALESCE(completed_at, NOW()), updated_at = NOW() WHERE id = $2',
+        [status, id]
+      );
     } else if (status === 'DRIVER_ACCEPTED') {
-      db.run("UPDATE emergency_requests SET status = ?, accepted_at = COALESCE(accepted_at, ?), updated_at = ? WHERE id = ?", [status, now, now, id]);
+      await dbQuery(
+        'UPDATE emergency_requests SET status = $1, accepted_at = COALESCE(accepted_at, NOW()), updated_at = NOW() WHERE id = $2',
+        [status, id]
+      );
     } else {
-      db.run("UPDATE emergency_requests SET status = ?, updated_at = ? WHERE id = ?", [status, now, id]);
+      await dbQuery(
+        'UPDATE emergency_requests SET status = $1, updated_at = NOW() WHERE id = $2',
+        [status, id]
+      );
     }
 
-    // Handle ambulance state transitions
+    // Ambulance state transition
     if (currentRequest.ambulance_id) {
       if (status === 'COMPLETED' || status === 'CANCELLED') {
-        // Free the ambulance back to AVAILABLE
-        db.run("UPDATE ambulances SET status = 'AVAILABLE' WHERE id = ?", [currentRequest.ambulance_id]);
+        await dbQuery("UPDATE ambulances SET status = 'AVAILABLE' WHERE id = $1", [currentRequest.ambulance_id]);
       } else if (['DRIVER_ACCEPTED', 'ON_THE_WAY', 'REACHED'].includes(status)) {
-        db.run("UPDATE ambulances SET status = 'BUSY' WHERE id = ?", [currentRequest.ambulance_id]);
+        await dbQuery("UPDATE ambulances SET status = 'BUSY' WHERE id = $1", [currentRequest.ambulance_id]);
       }
     }
 
-    // If request had no ambulance and is now being assigned directly
     if (!currentRequest.ambulance_id && req.body.ambulance_id) {
-      db.run("UPDATE emergency_requests SET ambulance_id = ? WHERE id = ?", [req.body.ambulance_id, id]);
-      db.run("UPDATE ambulances SET status = 'BUSY' WHERE id = ?", [req.body.ambulance_id]);
+      await dbQuery('UPDATE emergency_requests SET ambulance_id = $1 WHERE id = $2', [req.body.ambulance_id, id]);
+      await dbQuery("UPDATE ambulances SET status = 'BUSY' WHERE id = $1", [req.body.ambulance_id]);
     }
 
-    // Add activity log
     const actor = updated_by || 'System / Driver';
     let logDescription = `Status updated to ${status}`;
     if (status === 'DRIVER_ACCEPTED') logDescription = 'Ambulance driver accepted dispatch request';
@@ -2711,17 +2270,17 @@ apiRouter.put('/emergency/:id/status', async (req: Request, res: Response) => {
     if (status === 'COMPLETED') logDescription = 'Emergency resolved and patient admitted to hospital trauma center';
     if (status === 'CANCELLED') logDescription = 'Emergency request cancelled';
 
-    db.run(
-      "INSERT INTO activity_logs (emergency_id, action, performed_by, timestamp) VALUES (?, ?, ?, ?)",
-      [id, logDescription, actor, now]
+    await dbQuery(
+      `INSERT INTO activity_logs (emergency_id, action, performed_by, timestamp) 
+       VALUES ($1, $2, $3, NOW())`,
+      [id, logDescription, actor]
     );
 
-    // Trigger Role-Specific Notifications based on Status
+    // Notifications
     if (status === 'ON_THE_WAY') {
-      // 1. Patient Notification: Exact user wording
       if (currentRequest.patient_id) {
-        createNotification(db, {
-          userId: Number(currentRequest.patient_id),
+        await createPgNotification({
+          userId: String(currentRequest.patient_id),
           role: 'patient',
           title: 'Ambulance On The Way',
           message: 'Your ambulance is on the way.',
@@ -2729,18 +2288,16 @@ apiRouter.put('/emergency/:id/status', async (req: Request, res: Response) => {
           emergencyRequestId: id,
         });
       }
-      // 2. Admin Notification
-      notifyRole(db, 'admin', {
+      await notifyPgRole('admin', {
         title: `Ambulance En Route #${id}`,
         message: `Ambulance is now en route to ${currentRequest.location} for emergency #${id}.`,
         notificationType: 'ADMIN_STATUS_UPDATE',
         emergencyRequestId: id,
       });
     } else if (status === 'REACHED') {
-      // 1. Patient Notification: Exact user wording
       if (currentRequest.patient_id) {
-        createNotification(db, {
-          userId: Number(currentRequest.patient_id),
+        await createPgNotification({
+          userId: String(currentRequest.patient_id),
           role: 'patient',
           title: 'Ambulance Arrived',
           message: 'Your ambulance has reached your location.',
@@ -2748,18 +2305,16 @@ apiRouter.put('/emergency/:id/status', async (req: Request, res: Response) => {
           emergencyRequestId: id,
         });
       }
-      // 2. Admin Notification
-      notifyRole(db, 'admin', {
+      await notifyPgRole('admin', {
         title: `Ambulance At Scene #${id}`,
         message: `Ambulance reached incident scene for emergency request #${id} (${currentRequest.location}).`,
         notificationType: 'ADMIN_STATUS_UPDATE',
         emergencyRequestId: id,
       });
     } else if (status === 'COMPLETED') {
-      // 1. Patient Notification: Exact user wording
       if (currentRequest.patient_id) {
-        createNotification(db, {
-          userId: Number(currentRequest.patient_id),
+        await createPgNotification({
+          userId: String(currentRequest.patient_id),
           role: 'patient',
           title: 'Emergency Request Completed',
           message: 'Your emergency request has been completed.',
@@ -2767,10 +2322,9 @@ apiRouter.put('/emergency/:id/status', async (req: Request, res: Response) => {
           emergencyRequestId: id,
         });
       }
-      // 2. Driver Notification
       if (currentRequest.driver_id) {
-        createNotification(db, {
-          userId: Number(currentRequest.driver_id),
+        await createPgNotification({
+          userId: String(currentRequest.driver_id),
           role: 'driver',
           title: 'Mission Completed',
           message: `Hospital handover complete for emergency request #${id}. Unit is now ready on standby.`,
@@ -2778,8 +2332,7 @@ apiRouter.put('/emergency/:id/status', async (req: Request, res: Response) => {
           emergencyRequestId: id,
         });
       }
-      // 3. Admin Notification
-      notifyRole(db, 'admin', {
+      await notifyPgRole('admin', {
         title: `Emergency Completed #${id}`,
         message: `Emergency request #${id} (${currentRequest.emergency_type} at ${currentRequest.location}) has been successfully completed.`,
         notificationType: 'ADMIN_EMERGENCY_COMPLETED',
@@ -2787,8 +2340,8 @@ apiRouter.put('/emergency/:id/status', async (req: Request, res: Response) => {
       });
     } else if (status === 'CANCELLED') {
       if (currentRequest.patient_id) {
-        createNotification(db, {
-          userId: Number(currentRequest.patient_id),
+        await createPgNotification({
+          userId: String(currentRequest.patient_id),
           role: 'patient',
           title: 'Emergency Request Cancelled',
           message: `Your emergency request #${id} has been cancelled.`,
@@ -2797,8 +2350,8 @@ apiRouter.put('/emergency/:id/status', async (req: Request, res: Response) => {
         });
       }
       if (currentRequest.driver_id) {
-        createNotification(db, {
-          userId: Number(currentRequest.driver_id),
+        await createPgNotification({
+          userId: String(currentRequest.driver_id),
           role: 'driver',
           title: 'Emergency Cancelled',
           message: `Emergency request #${id} was cancelled.`,
@@ -2806,7 +2359,7 @@ apiRouter.put('/emergency/:id/status', async (req: Request, res: Response) => {
           emergencyRequestId: id,
         });
       }
-      notifyRole(db, 'admin', {
+      await notifyPgRole('admin', {
         title: `Emergency Cancelled #${id}`,
         message: `Emergency request #${id} has been cancelled.`,
         notificationType: 'ADMIN_EMERGENCY_CANCELLED',
@@ -2814,11 +2367,8 @@ apiRouter.put('/emergency/:id/status', async (req: Request, res: Response) => {
       });
     }
 
-    saveDb(db);
-
-    // Fetch updated record
-    const updatedQuery = db.exec(`
-      SELECT 
+    const updatedQuery = await dbQuery(
+      `SELECT 
         e.*,
         a.vehicle_number,
         COALESCE(u.name, a.driver_name) as driver_name,
@@ -2828,16 +2378,17 @@ apiRouter.put('/emergency/:id/status', async (req: Request, res: Response) => {
         a.status as ambulance_status
       FROM emergency_requests e
       LEFT JOIN ambulances a ON e.ambulance_id = a.id
-      LEFT JOIN users u ON e.driver_id = u.id
-      WHERE e.id = ${id}
-    `);
+      LEFT JOIN users u ON e.driver_id = u.id::text
+      WHERE e.id = $1`,
+      [id]
+    );
 
-    const updated = formatQueryResult(updatedQuery[0]).map(parseEmergencyRecord);
+    const updated = updatedQuery.map(parseEmergencyRecord)[0];
 
-    if (updated && updated[0]) {
+    if (updated) {
       broadcastAmbulanceStatus(
         id,
-        currentRequest.ambulance_id || updated[0].ambulance_id || 0,
+        currentRequest.ambulance_id || updated.ambulance_id || 0,
         status,
         actor
       );
@@ -2845,7 +2396,7 @@ apiRouter.put('/emergency/:id/status', async (req: Request, res: Response) => {
 
     return res.json({
       message: `Emergency status successfully updated to ${status}`,
-      emergency: updated[0],
+      emergency: updated,
     });
   } catch (error: any) {
     console.error('Update status error:', error);
@@ -2854,77 +2405,53 @@ apiRouter.put('/emergency/:id/status', async (req: Request, res: Response) => {
 });
 
 // POST /api/emergency/:id/rating
-// Allows patients to rate ambulance response speed and paramedic service after SOS completion
 apiRouter.post('/emergency/:id/rating', async (req: Request, res: Response) => {
   try {
-    const id = Number(req.params.id);
-    const { rating_overall_stars, rating_speed_stars, rating_service_stars, rating_feedback } = req.body;
+    const id = parseInt(req.params.id, 10);
+    const { overallStars, speedStars, serviceStars, feedback } = req.body;
 
-    const speedStars = Math.max(1, Math.min(5, Math.round(Number(rating_speed_stars) || 5)));
-    const serviceStars = Math.max(1, Math.min(5, Math.round(Number(rating_service_stars) || 5)));
-    const overallStars = Math.max(
-      1,
-      Math.min(5, Math.round(Number(rating_overall_stars) || Math.round((speedStars + serviceStars) / 2)))
-    );
-    const feedbackText = typeof rating_feedback === 'string' ? rating_feedback.trim().slice(0, 1000) : '';
+    if (!overallStars || overallStars < 1 || overallStars > 5) {
+      return res.status(400).json({ error: 'Valid overall star rating between 1 and 5 is required.' });
+    }
 
-    const db = await getDb();
-    const checkQuery = db.exec(`SELECT * FROM emergency_requests WHERE id = ${id}`);
-    const requests = formatQueryResult(checkQuery[0]);
-    if (requests.length === 0) {
+    const check = await dbQuery('SELECT id, status FROM emergency_requests WHERE id = $1', [id]);
+    if (check.length === 0) {
       return res.status(404).json({ error: 'Emergency request not found' });
     }
 
-    const emergency = requests[0];
-    const now = new Date().toISOString();
-
-    db.run(
+    await dbQuery(
       `UPDATE emergency_requests 
-       SET rating_overall_stars = ?, 
-           rating_speed_stars = ?, 
-           rating_service_stars = ?, 
-           rating_feedback = ?, 
-           rating_submitted_at = ?,
-           updated_at = ?
-       WHERE id = ?`,
-      [overallStars, speedStars, serviceStars, feedbackText, now, now, id]
-    );
-
-    // Audit log entry
-    db.run(
-      `INSERT INTO activity_logs (emergency_id, action, performed_by, timestamp) VALUES (?, ?, ?, ?)`,
+       SET rating_overall_stars = $1,
+           rating_speed_stars = $2,
+           rating_service_stars = $3,
+           rating_feedback = $4,
+           rating_submitted_at = NOW(),
+           updated_at = NOW()
+       WHERE id = $5`,
       [
+        parseInt(overallStars, 10),
+        speedStars ? parseInt(speedStars, 10) : null,
+        serviceStars ? parseInt(serviceStars, 10) : null,
+        feedback ? feedback.trim() : null,
         id,
-        `Patient submitted rating: Speed ${speedStars}/5, Service ${serviceStars}/5${feedbackText ? ` ("${feedbackText.slice(0, 40)}")` : ''}`,
-        emergency.patient_name || 'Patient',
-        now,
       ]
     );
 
-    // Notify driver if assigned
-    if (emergency.driver_id) {
-      createNotification(db, {
-        userId: Number(emergency.driver_id),
-        role: 'driver',
-        title: 'Ambulance Rating Received',
-        message: `Patient rated SOS #${emergency.id}: Speed ${speedStars}/5, Service ${serviceStars}/5.`,
-        notificationType: 'RATING_RECEIVED',
-        emergencyRequestId: id,
-      });
-    }
+    await dbQuery(
+      `INSERT INTO activity_logs (emergency_id, action, performed_by, timestamp) 
+       VALUES ($1, $2, 'Patient', NOW())`,
+      [id, `Patient submitted feedback rating: ${overallStars}/5 stars${feedback ? ` - "${feedback.trim()}"` : ''}`]
+    );
 
-    // Notify admin
-    notifyRole(db, 'admin', {
-      title: `Ambulance Rated #${id}`,
-      message: `SOS #${emergency.id} received rating: Speed ${speedStars}/5, Service ${serviceStars}/5 for ${emergency.vehicle_number || 'assigned ambulance'}.`,
-      notificationType: 'ADMIN_RATING_RECEIVED',
+    await notifyPgRole('admin', {
+      title: `Emergency Service Feedback #${id}`,
+      message: `Patient submitted a ${overallStars}-star rating${feedback ? `: "${feedback.trim()}"` : ''}`,
+      notificationType: 'EMERGENCY_RATING_SUBMITTED',
       emergencyRequestId: id,
     });
 
-    saveDb(db);
-
-    const updatedQuery = db.exec(`
-      SELECT 
+    const refetched = await dbQuery(
+      `SELECT 
         e.*,
         a.vehicle_number,
         COALESCE(u.name, a.driver_name) as driver_name,
@@ -2934,15 +2461,16 @@ apiRouter.post('/emergency/:id/rating', async (req: Request, res: Response) => {
         a.status as ambulance_status
       FROM emergency_requests e
       LEFT JOIN ambulances a ON e.ambulance_id = a.id
-      LEFT JOIN users u ON e.driver_id = u.id
-      WHERE e.id = ${id}
-    `);
+      LEFT JOIN users u ON e.driver_id = u.id::text
+      WHERE e.id = $1`,
+      [id]
+    );
 
-    const updated = formatQueryResult(updatedQuery[0]).map(parseEmergencyRecord);
+    const updated = refetched.map(parseEmergencyRecord)[0];
 
     return res.json({
       message: 'Thank you for your feedback! Your rating has been successfully submitted.',
-      emergency: updated[0],
+      emergency: updated,
     });
   } catch (error: any) {
     console.error('Submit rating error:', error);
@@ -2951,38 +2479,35 @@ apiRouter.post('/emergency/:id/rating', async (req: Request, res: Response) => {
 });
 
 // POST /api/emergency/:id/proximity-alert
-// Automated notification triggered when assigned ambulance is within 2 km of patient GPS
 apiRouter.post('/emergency/:id/proximity-alert', async (req: Request, res: Response) => {
   try {
     const id = parseInt(req.params.id, 10);
     const { distance_km, eta_minutes } = req.body;
-    const db = await getDb();
 
-    const emergencyQuery = db.exec(`
-      SELECT 
+    const emergencies = await dbQuery(
+      `SELECT 
         e.*, 
         a.vehicle_number, 
         COALESCE(u.name, a.driver_name) as driver_name, 
         COALESCE(u.phone, a.phone) as driver_phone
       FROM emergency_requests e
       LEFT JOIN ambulances a ON e.ambulance_id = a.id
-      LEFT JOIN users u ON e.driver_id = u.id
-      WHERE e.id = ${id}
-    `);
+      LEFT JOIN users u ON e.driver_id = u.id::text
+      WHERE e.id = $1`,
+      [id]
+    );
 
-    if (!emergencyQuery[0] || emergencyQuery[0].values.length === 0) {
+    if (emergencies.length === 0) {
       return res.status(404).json({ error: 'Emergency request not found' });
     }
 
-    const emergency = formatQueryResult(emergencyQuery[0]).map(parseEmergencyRecord)[0];
-    const now = new Date().toISOString();
+    const emergency = emergencies.map(parseEmergencyRecord)[0];
     const distText = typeof distance_km === 'number' ? `${distance_km.toFixed(1)} km` : 'within 2 km';
     const etaText = eta_minutes ? `ETA ~${eta_minutes} mins` : 'arriving shortly';
 
-    // 1. Send high-priority notification to patient
     if (emergency.patient_id) {
-      createNotification(db, {
-        userId: Number(emergency.patient_id),
+      await createPgNotification({
+        userId: String(emergency.patient_id),
         role: 'patient',
         title: '🚨 Ambulance Nearby: Within 2 km!',
         message: `Assigned unit ${emergency.vehicle_number || 'Ambulance'} is currently ${distText} from your GPS location (${etaText}). Please ensure building gates are unlocked.`,
@@ -2991,26 +2516,21 @@ apiRouter.post('/emergency/:id/proximity-alert', async (req: Request, res: Respo
       });
     }
 
-    // 2. Audit log entry
-    db.run(
-      `INSERT INTO activity_logs (emergency_id, action, performed_by, timestamp) VALUES (?, ?, ?, ?)`,
+    await dbQuery(
+      `INSERT INTO activity_logs (emergency_id, action, performed_by, timestamp) 
+       VALUES ($1, $2, 'System Proximity Radar', NOW())`,
       [
         id,
         `Automated 2km proximity threshold crossed: ${emergency.vehicle_number || 'Ambulance'} is ${distText} away (${etaText})`,
-        'System Proximity Radar',
-        now,
       ]
     );
 
-    // Update current_distance_km if provided
     if (typeof distance_km === 'number') {
-      db.run(
-        `UPDATE emergency_requests SET current_distance_km = ?, updated_at = ? WHERE id = ?`,
-        [distance_km, now, id]
+      await dbQuery(
+        'UPDATE emergency_requests SET current_distance_km = $1, updated_at = NOW() WHERE id = $2',
+        [distance_km, id]
       );
     }
-
-    saveDb(db);
 
     return res.json({
       success: true,
@@ -3024,11 +2544,10 @@ apiRouter.post('/emergency/:id/proximity-alert', async (req: Request, res: Respo
   }
 });
 
-// POST /api/emergency/:id/vitals (e-PCR Tele-Triage & Hospital ER Pre-Arrival Notification)
-// Allows paramedic to transmit live patient vitals and trigger hospital trauma bay preparation
+// POST /api/emergency/:id/vitals
 apiRouter.post('/emergency/:id/vitals', async (req: Request, res: Response) => {
   try {
-    const id = parseInt(req.params.id, 10);
+    const id = Number(req.params.id);
     const {
       vitals_heart_rate,
       vitals_blood_pressure,
@@ -3042,31 +2561,28 @@ apiRouter.post('/emergency/:id/vitals', async (req: Request, res: Response) => {
       trauma_bay_required,
     } = req.body;
 
-    const db = await getDb();
-    const checkQuery = db.exec(`SELECT * FROM emergency_requests WHERE id = ${id}`);
-    const requests = formatQueryResult(checkQuery[0]);
-    if (requests.length === 0) {
+    const emergencies = await dbQuery('SELECT * FROM emergency_requests WHERE id = $1', [id]);
+    if (emergencies.length === 0) {
       return res.status(404).json({ error: 'Emergency request not found' });
     }
 
-    const emergency = requests[0];
-    const now = new Date().toISOString();
+    const emergency = emergencies[0];
     const acuity = triage_acuity || 'CODE_YELLOW';
+    const nowIso = new Date().toISOString();
 
-    // Update database with latest in-transit vitals
-    db.run(
+    await dbQuery(
       `UPDATE emergency_requests 
-       SET vitals_heart_rate = ?,
-           vitals_blood_pressure = ?,
-           vitals_spo2 = ?,
-           vitals_respiratory_rate = ?,
-           vitals_gcs = ?,
-           vitals_blood_sugar = ?,
-           triage_acuity = ?,
-           er_notified_at = ?,
-           er_prep_notes = ?,
-           updated_at = ?
-       WHERE id = ?`,
+       SET vitals_heart_rate = $1,
+           vitals_blood_pressure = $2,
+           vitals_spo2 = $3,
+           vitals_respiratory_rate = $4,
+           vitals_gcs = $5,
+           vitals_blood_sugar = $6,
+           triage_acuity = $7,
+           er_notified_at = NOW(),
+           er_prep_notes = $8,
+           updated_at = NOW()
+       WHERE id = $9`,
       [
         vitals_heart_rate ? Number(vitals_heart_rate) : null,
         vitals_blood_pressure ? String(vitals_blood_pressure).trim() : null,
@@ -3075,31 +2591,27 @@ apiRouter.post('/emergency/:id/vitals', async (req: Request, res: Response) => {
         vitals_gcs ? Number(vitals_gcs) : null,
         vitals_blood_sugar ? Number(vitals_blood_sugar) : null,
         acuity,
-        now,
         er_prep_notes ? String(er_prep_notes).trim() : null,
-        now,
         id,
       ]
     );
 
-    // Audit log
     const hrText = vitals_heart_rate ? `HR: ${vitals_heart_rate} bpm` : '';
     const bpText = vitals_blood_pressure ? `BP: ${vitals_blood_pressure}` : '';
     const spo2Text = vitals_spo2 ? `SpO2: ${vitals_spo2}%` : '';
     const gcsText = vitals_gcs ? `GCS: ${vitals_gcs}/15` : '';
     const vitalsSummary = [acuity, hrText, bpText, spo2Text, gcsText].filter(Boolean).join(' | ');
 
-    db.run(
-      `INSERT INTO activity_logs (emergency_id, action, performed_by, timestamp) VALUES (?, ?, ?, ?)`,
+    await dbQuery(
+      `INSERT INTO activity_logs (emergency_id, action, performed_by, timestamp) 
+       VALUES ($1, $2, $3, NOW())`,
       [
         id,
         `Paramedic transmitted in-transit e-PCR Tele-Triage (${vitalsSummary}) to Emergency Department`,
         emergency.driver_name || 'Paramedic',
-        now,
       ]
     );
 
-    // Send notifications to Admin and receiving hospital ER
     const prepAlert = [
       blood_bank_required ? '🩸 Blood Bank Cross-Match Requested' : '',
       trauma_bay_required ? '🚨 Trauma Resuscitation Bay Reserved' : '',
@@ -3107,14 +2619,12 @@ apiRouter.post('/emergency/:id/vitals', async (req: Request, res: Response) => {
       .filter(Boolean)
       .join(', ');
 
-    notifyRole(db, 'admin', {
+    await notifyPgRole('admin', {
       title: `🏥 ER Pre-Arrival Alert: ${acuity}`,
       message: `Unit transporting ${emergency.patient_name} (${emergency.emergency_type}) has transmitted vital signs. ${vitalsSummary}${prepAlert ? `. ${prepAlert}` : ''}`,
       notificationType: 'ER_TRIAGE_ALERT',
       emergencyRequestId: id,
     });
-
-    saveDb(db);
 
     const vitalsPayload = {
       emergencyId: id,
@@ -3126,14 +2636,13 @@ apiRouter.post('/emergency/:id/vitals', async (req: Request, res: Response) => {
       vitals_gcs: Number(vitals_gcs) || null,
       vitals_blood_sugar: Number(vitals_blood_sugar) || null,
       triage_acuity: acuity,
-      er_notified_at: now,
+      er_notified_at: nowIso,
       er_prep_notes: er_prep_notes || null,
       blood_bank_required: !!blood_bank_required,
       trauma_bay_required: !!trauma_bay_required,
       destination_hospital: emergency.selected_hospital || emergency.destination_hospital || 'Emergency Trauma Center',
     };
 
-    // Broadcast in real-time over Socket.IO to live hospital trauma dashboards
     broadcastPatientVitalsUpdated(id, vitalsPayload);
 
     return res.json({
@@ -3153,7 +2662,6 @@ apiRouter.post('/emergency/:id/epcr', async (req: Request, res: Response) => {
 });
 
 // GET /api/patient/:id/emergency-card
-// Public read-only endpoint for first responders & bystanders scanning patient ICE QR code
 apiRouter.get('/patient/:id/emergency-card', async (req: Request, res: Response) => {
   try {
     const id = req.params.id;
@@ -3161,105 +2669,48 @@ apiRouter.get('/patient/:id/emergency-card', async (req: Request, res: Response)
       return res.status(400).json({ error: 'Patient ID is required' });
     }
 
-    const pgPool = getPostgresPool();
-    if (pgPool) {
-      try {
-        const uRes = await pgPool.query(
-          'SELECT id, name, phone FROM users WHERE id::text = $1::text AND (delete_flag IS FALSE OR delete_flag IS NULL)',
-          [id]
-        );
-        if (uRes.rows && uRes.rows.length > 0) {
-          const user = uRes.rows[0];
-          return res.json({
-            success: true,
-            card: {
-              id: user.id,
-              name: user.name,
-              blood_type: 'B+',
-              allergies: 'None reported',
-              emergency_contact: {
-                name: 'Emergency Contact',
-                phone: user.phone || '+91 108',
-                relation: 'Next of Kin',
-              },
-              medical_notes: 'No chronic conditions logged',
-              verified_system: 'Arogyavahini National Emergency Registry',
-            },
-          });
-        }
-        return res.status(404).json({ error: 'Patient profile not found' });
-      } catch (pgErr) {
-        console.warn('[Emergency Card] PostgreSQL lookup error:', pgErr);
-        if (process.env.NODE_ENV === 'production') {
-          return res.status(500).json({ error: 'Failed to fetch emergency card from database' });
-        }
-      }
+    const uRes = await dbQuery(
+      `SELECT id, name, phone, blood_type, allergies, emergency_contact_name, emergency_contact_phone, emergency_contact_relation, medical_notes
+       FROM users 
+       WHERE id::text = $1::text AND (delete_flag IS FALSE OR delete_flag IS NULL)`,
+      [id]
+    );
+
+    if (uRes.length > 0) {
+      const user = uRes[0];
+      return res.json({
+        success: true,
+        card: {
+          id: user.id,
+          name: user.name,
+          blood_type: user.blood_type || 'B+',
+          allergies: user.allergies || 'None reported',
+          emergency_contact: {
+            name: user.emergency_contact_name || 'Emergency Contact',
+            phone: user.emergency_contact_phone || user.phone || '+91 108',
+            relation: user.emergency_contact_relation || 'Next of Kin',
+          },
+          medical_notes: user.medical_notes || 'No chronic conditions logged',
+          verified_system: 'Arogyavahini National Emergency Registry',
+        },
+      });
     }
 
-    const db = await getDb();
-    const cleanId = String(id).replace(/'/g, "''");
-    const query = db.exec(`
-      SELECT 
-        id, name, phone, blood_type, allergies, 
-        emergency_contact_name, emergency_contact_phone, emergency_contact_relation,
-        medical_notes, created_at
-      FROM users 
-      WHERE id = '${cleanId}'
-    `);
-    const users = formatQueryResult(query[0]);
-    if (users.length === 0) {
-      return res.status(404).json({ error: 'Patient profile not found' });
-    }
-    const user = users[0];
-    return res.json({
-      success: true,
-      card: {
-        id: user.id,
-        name: user.name,
-        blood_type: user.blood_type || 'B+',
-        allergies: user.allergies || 'None reported',
-        emergency_contact: {
-          name: user.emergency_contact_name || 'Emergency Contact',
-          phone: user.emergency_contact_phone || '+91 108',
-          relation: user.emergency_contact_relation || 'Next of Kin',
-        },
-        medical_notes: user.medical_notes || 'No chronic conditions logged',
-        verified_system: 'Arogyavahini National Emergency Registry',
-      },
-    });
+    return res.status(404).json({ error: 'Patient profile not found' });
   } catch (error: any) {
+    console.error('Fetch emergency card error:', error);
     return res.status(500).json({ error: error.message || 'Failed to fetch emergency card' });
   }
 });
 
 // ----------------------------------------------------
-// 3. AMBULANCES MANAGEMENT
+// 3. AMBULANCES FLEET MANAGEMENT
 // ----------------------------------------------------
 
 // GET /api/ambulances
 apiRouter.get('/ambulances', async (req: Request, res: Response) => {
   try {
-    const pgPool = getPostgresPool();
-    if (pgPool) {
-      try {
-        const resPg = await pgPool.query('SELECT * FROM ambulances ORDER BY id ASC');
-        return res.json({
-          count: resPg.rows.length,
-          ambulances: resPg.rows,
-        });
-      } catch (pgErr: any) {
-        if (pgErr?.code === 'ECONNREFUSED' || pgErr?.code === 'ETIMEDOUT') {
-          disablePostgresPool(pgErr);
-        } else {
-          console.warn('[Ambulances] PostgreSQL query fallback:', pgErr?.message || pgErr);
-        }
-      }
-    }
-
-    const db = await getDb();
-    const query = db.exec("SELECT * FROM ambulances ORDER BY id ASC");
-    const ambulances = formatQueryResult(query[0]);
-
+    const ambulances = await dbQuery('SELECT * FROM ambulances ORDER BY id ASC');
     return res.json({
       count: ambulances.length,
       ambulances,
@@ -3273,30 +2724,10 @@ apiRouter.get('/ambulances', async (req: Request, res: Response) => {
 // GET /api/ambulances/available
 apiRouter.get('/ambulances/available', async (req: Request, res: Response) => {
   try {
-    const pgPool = getPostgresPool();
-    if (pgPool) {
-      try {
-        const resPg = await pgPool.query("SELECT * FROM ambulances WHERE status = 'AVAILABLE' ORDER BY id ASC");
-        return res.json({
-          count: resPg.rows.length,
-          ambulances: resPg.rows,
-        });
-      } catch (pgErr: any) {
-        if (pgErr?.code === 'ECONNREFUSED' || pgErr?.code === 'ETIMEDOUT') {
-          disablePostgresPool(pgErr);
-        } else {
-          console.warn('[Ambulances] PostgreSQL available query fallback:', pgErr?.message || pgErr);
-        }
-      }
-    }
-
-    const db = await getDb();
-    const query = db.exec("SELECT * FROM ambulances WHERE status = 'AVAILABLE' ORDER BY id ASC");
-    const available = formatQueryResult(query[0]);
-
+    const ambulances = await dbQuery("SELECT * FROM ambulances WHERE status = 'AVAILABLE' ORDER BY id ASC");
     return res.json({
-      count: available.length,
-      ambulances: available,
+      count: ambulances.length,
+      ambulances,
     });
   } catch (error: any) {
     console.error('Fetch available ambulances error:', error);
@@ -3313,22 +2744,26 @@ apiRouter.post('/ambulances', async (req: Request, res: Response) => {
       return res.status(400).json({ error: 'Vehicle number, driver name, phone, and base location are required.' });
     }
 
-    const db = await getDb();
     const ambStatus = status || 'AVAILABLE';
 
-    db.run(
-      "INSERT INTO ambulances (vehicle_number, driver_name, phone, type, base_location, status, driver_user_id) VALUES (?, ?, ?, ?, ?, ?, ?)",
-      [vehicle_number.trim(), driver_name.trim(), phone.trim(), type || 'Basic Life Support (BLS)', base_location.trim(), ambStatus, driver_user_id || null]
+    const insertRes = await dbQuery(
+      `INSERT INTO ambulances (vehicle_number, driver_name, phone, type, base_location, status, driver_user_id, created_at)
+       VALUES ($1, $2, $3, $4, $5, $6, $7, NOW())
+       RETURNING *`,
+      [
+        vehicle_number.trim(),
+        driver_name.trim(),
+        phone.trim(),
+        type || 'Basic Life Support (BLS)',
+        base_location.trim(),
+        ambStatus,
+        driver_user_id ? String(driver_user_id) : null,
+      ]
     );
-
-    saveDb(db);
-
-    const query = db.exec(`SELECT * FROM ambulances WHERE vehicle_number = '${vehicle_number.trim()}'`);
-    const ambulances = formatQueryResult(query[0]);
 
     return res.status(201).json({
       message: 'Ambulance registered successfully',
-      ambulance: ambulances[0],
+      ambulance: insertRes[0],
     });
   } catch (error: any) {
     console.error('Create ambulance error:', error);
@@ -3347,16 +2782,18 @@ apiRouter.put('/ambulances/:id/status', async (req: Request, res: Response) => {
       return res.status(400).json({ error: `Invalid ambulance status. Allowed: ${allowed.join(', ')}` });
     }
 
-    const db = await getDb();
-    db.run("UPDATE ambulances SET status = ? WHERE id = ?", [status, id]);
-    saveDb(db);
+    const updated = await dbQuery(
+      'UPDATE ambulances SET status = $1 WHERE id = $2 RETURNING *',
+      [status, id]
+    );
 
-    const query = db.exec(`SELECT * FROM ambulances WHERE id = ${id}`);
-    const ambulances = formatQueryResult(query[0]);
+    if (updated.length === 0) {
+      return res.status(404).json({ error: 'Ambulance not found' });
+    }
 
     return res.json({
       message: `Ambulance status updated to ${status}`,
-      ambulance: ambulances[0],
+      ambulance: updated[0],
     });
   } catch (error: any) {
     console.error('Update ambulance status error:', error);
@@ -3365,7 +2802,6 @@ apiRouter.put('/ambulances/:id/status', async (req: Request, res: Response) => {
 });
 
 // POST /api/ambulances/:id/location
-// Driver streams periodic GPS location of ambulance
 apiRouter.post('/ambulances/:id/location', async (req: Request, res: Response) => {
   try {
     const id = Number(req.params.id);
@@ -3375,30 +2811,19 @@ apiRouter.post('/ambulances/:id/location', async (req: Request, res: Response) =
       return res.status(400).json({ error: 'Latitude and Longitude are required' });
     }
 
-    const db = await getDb();
-    const now = new Date().toISOString();
-
-    const query = db.exec(`SELECT * FROM ambulances WHERE id = ${id}`);
-    const ambulances = formatQueryResult(query[0]);
+    const ambulances = await dbQuery('SELECT * FROM ambulances WHERE id = $1', [id]);
     if (ambulances.length === 0) {
       return res.status(404).json({ error: 'Ambulance not found' });
     }
 
-    db.run(
+    await dbQuery(
       `UPDATE ambulances SET
-        current_latitude = ?,
-        current_longitude = ?,
-        last_gps_update = ?
-       WHERE id = ?`,
-      [
-        Number(latitude),
-        Number(longitude),
-        now,
-        id,
-      ]
+        current_latitude = $1,
+        current_longitude = $2,
+        last_gps_update = NOW()
+       WHERE id = $3`,
+      [Number(latitude), Number(longitude), id]
     );
-
-    saveDb(db);
 
     broadcastAmbulanceLocation({
       ambulanceId: id,
@@ -3417,7 +2842,7 @@ apiRouter.post('/ambulances/:id/location', async (req: Request, res: Response) =
       ambulance_id: id,
       latitude: Number(latitude),
       longitude: Number(longitude),
-      updated_at: now,
+      updated_at: new Date().toISOString(),
     });
   } catch (error: any) {
     console.error('Ambulance location update error:', error);
@@ -3432,40 +2857,34 @@ apiRouter.post('/ambulances/:id/location', async (req: Request, res: Response) =
 // GET /api/stats
 apiRouter.get('/stats', async (req: Request, res: Response) => {
   try {
-    const db = await getDb();
+    const totalReqQuery = await dbQuery('SELECT COUNT(*)::int as total FROM emergency_requests');
+    const totalEmergencies = totalReqQuery[0]?.total || 0;
 
-    // Total emergencies
-    const totalReqQuery = db.exec("SELECT COUNT(*) as total FROM emergency_requests");
-    const totalEmergencies = (totalReqQuery[0]?.values[0]?.[0] as number) || 0;
+    const activeReqQuery = await dbQuery("SELECT COUNT(*)::int as active FROM emergency_requests WHERE status NOT IN ('COMPLETED', 'CANCELLED')");
+    const activeEmergencies = activeReqQuery[0]?.active || 0;
 
-    // Active emergencies (not COMPLETED or CANCELLED)
-    const activeReqQuery = db.exec("SELECT COUNT(*) as active FROM emergency_requests WHERE status NOT IN ('COMPLETED', 'CANCELLED')");
-    const activeEmergencies = (activeReqQuery[0]?.values[0]?.[0] as number) || 0;
+    const totalAmbQuery = await dbQuery('SELECT COUNT(*)::int as total FROM ambulances');
+    const totalAmbulances = totalAmbQuery[0]?.total || 0;
 
-    // Total Ambulances
-    const totalAmbQuery = db.exec("SELECT COUNT(*) as total FROM ambulances");
-    const totalAmbulances = (totalAmbQuery[0]?.values[0]?.[0] as number) || 0;
+    const availAmbQuery = await dbQuery("SELECT COUNT(*)::int as avail FROM ambulances WHERE status = 'AVAILABLE'");
+    const availableAmbulances = availAmbQuery[0]?.avail || 0;
 
-    // Available Ambulances
-    const availAmbQuery = db.exec("SELECT COUNT(*) as avail FROM ambulances WHERE status = 'AVAILABLE'");
-    const availableAmbulances = (availAmbQuery[0]?.values[0]?.[0] as number) || 0;
+    const busyAmbQuery = await dbQuery("SELECT COUNT(*)::int as busy FROM ambulances WHERE status IN ('ASSIGNED', 'BUSY')");
+    const busyAmbulances = busyAmbQuery[0]?.busy || 0;
 
-    // Assigned/Busy Ambulances
-    const busyAmbQuery = db.exec("SELECT COUNT(*) as busy FROM ambulances WHERE status IN ('ASSIGNED', 'BUSY')");
-    const busyAmbulances = (busyAmbQuery[0]?.values[0]?.[0] as number) || 0;
+    const completedReqQuery = await dbQuery("SELECT COUNT(*)::int as comp FROM emergency_requests WHERE status = 'COMPLETED'");
+    const completedEmergencies = completedReqQuery[0]?.comp || 0;
 
-    // Completed emergencies
-    const completedReqQuery = db.exec("SELECT COUNT(*) as comp FROM emergency_requests WHERE status = 'COMPLETED'");
-    const completedEmergencies = (completedReqQuery[0]?.values[0]?.[0] as number) || 0;
+    const typeBreakdown = await dbQuery('SELECT emergency_type, COUNT(*)::int as count FROM emergency_requests GROUP BY emergency_type');
 
-    // Breakdown by emergency type
-    const typeBreakdownQuery = db.exec("SELECT emergency_type, COUNT(*) as count FROM emergency_requests GROUP BY emergency_type");
-    const typeBreakdown = formatQueryResult(typeBreakdownQuery[0]);
-
-    // Real Average response time from completed emergencies (in minutes)
-    const avgTimeQuery = db.exec("SELECT AVG((julianday(updated_at) - julianday(created_at)) * 24 * 60) as avg_min FROM emergency_requests WHERE status = 'COMPLETED' AND created_at IS NOT NULL AND updated_at IS NOT NULL");
-    const rawAvg = (avgTimeQuery[0]?.values[0]?.[0] as number | null);
-    const averageResponseTimeMinutes = rawAvg && !isNaN(rawAvg) && rawAvg > 0 ? parseFloat(rawAvg.toFixed(1)) : null;
+    // Real average response time from completed emergencies in minutes
+    const avgTimeQuery = await dbQuery(`
+      SELECT AVG(EXTRACT(EPOCH FROM (updated_at - created_at)) / 60)::numeric(10, 1) as avg_min 
+      FROM emergency_requests 
+      WHERE status = 'COMPLETED' AND created_at IS NOT NULL AND updated_at IS NOT NULL
+    `);
+    const rawAvg = avgTimeQuery[0]?.avg_min ? parseFloat(avgTimeQuery[0].avg_min) : null;
+    const averageResponseTimeMinutes = rawAvg && !isNaN(rawAvg) && rawAvg > 0 ? rawAvg : null;
 
     return res.json({
       totalEmergencies,
@@ -3506,40 +2925,43 @@ apiRouter.post('/demo/reset', async (req: Request, res: Response) => {
 apiRouter.get('/notifications', async (req: Request, res: Response) => {
   try {
     const { userId, role, limit } = req.query;
-    const db = await getDb();
     const maxLimit = limit ? Math.min(Number(limit), 100) : 50;
 
     let sql = 'SELECT * FROM notifications WHERE 1=1';
-    const cleanUserId = userId ? String(userId).replace(/'/g, "''") : null;
+    const params: any[] = [];
+    const cleanUserId = userId ? String(userId) : null;
 
     if (role === 'admin') {
       if (cleanUserId) {
-        sql += ` AND (role = 'admin' OR user_id = '${cleanUserId}')`;
+        params.push(cleanUserId);
+        sql += ` AND (role = 'admin' OR user_id = $${params.length})`;
       } else {
-        sql += ` AND role = 'admin'`;
+        sql += " AND role = 'admin'";
       }
     } else if (role === 'driver') {
       if (cleanUserId) {
-        sql += ` AND (user_id = '${cleanUserId}' OR (role = 'driver' AND user_id IS NULL))`;
+        params.push(cleanUserId);
+        sql += ` AND (user_id = $${params.length} OR (role = 'driver' AND user_id IS NULL))`;
       } else {
-        sql += ` AND role = 'driver'`;
+        sql += " AND role = 'driver'";
       }
     } else if (role === 'patient') {
       if (cleanUserId) {
-        sql += ` AND (user_id = '${cleanUserId}' OR (role = 'patient' AND user_id IS NULL))`;
+        params.push(cleanUserId);
+        sql += ` AND (user_id = $${params.length} OR (role = 'patient' AND user_id IS NULL))`;
       } else {
-        sql += ` AND role = 'patient'`;
+        sql += " AND role = 'patient'";
       }
     } else if (cleanUserId) {
-      sql += ` AND user_id = '${cleanUserId}'`;
+      params.push(cleanUserId);
+      sql += ` AND user_id = $${params.length}`;
     }
 
-    sql += ` ORDER BY id DESC LIMIT ${maxLimit}`;
+    params.push(maxLimit);
+    sql += ` ORDER BY id DESC LIMIT $${params.length}`;
 
-    const query = db.exec(sql);
-    const notifications = formatQueryResult(query[0]);
+    const notifications = await dbQuery(sql, params);
 
-    // Calculate unread count
     let unreadCount = 0;
     for (const n of notifications) {
       if (!n.is_read) unreadCount++;
@@ -3560,11 +2982,7 @@ apiRouter.get('/notifications', async (req: Request, res: Response) => {
 apiRouter.patch('/notifications/:id/read', async (req: Request, res: Response) => {
   try {
     const id = Number(req.params.id);
-    const db = await getDb();
-
-    db.run('UPDATE notifications SET is_read = 1 WHERE id = ?', [id]);
-    saveDb(db);
-
+    await dbQuery('UPDATE notifications SET is_read = 1 WHERE id = $1', [id]);
     return res.json({ message: 'Notification marked as read', id });
   } catch (error: any) {
     console.error('Mark notification read error:', error);
@@ -3576,34 +2994,38 @@ apiRouter.patch('/notifications/:id/read', async (req: Request, res: Response) =
 apiRouter.post('/notifications/mark-all-read', async (req: Request, res: Response) => {
   try {
     const { userId, role } = req.body;
-    const db = await getDb();
-    const cleanUserId = userId ? String(userId).replace(/'/g, "''") : null;
+    const cleanUserId = userId ? String(userId) : null;
 
     let sql = 'UPDATE notifications SET is_read = 1 WHERE 1=1';
+    const params: any[] = [];
+
     if (role === 'admin') {
       if (cleanUserId) {
-        sql += ` AND (role = 'admin' OR user_id = '${cleanUserId}')`;
+        params.push(cleanUserId);
+        sql += ` AND (role = 'admin' OR user_id = $${params.length})`;
       } else {
-        sql += ` AND role = 'admin'`;
+        sql += " AND role = 'admin'";
       }
     } else if (role === 'driver') {
       if (cleanUserId) {
-        sql += ` AND (user_id = '${cleanUserId}' OR (role = 'driver' AND user_id IS NULL))`;
+        params.push(cleanUserId);
+        sql += ` AND (user_id = $${params.length} OR (role = 'driver' AND user_id IS NULL))`;
       } else {
-        sql += ` AND role = 'driver'`;
+        sql += " AND role = 'driver'";
       }
     } else if (role === 'patient') {
       if (cleanUserId) {
-        sql += ` AND (user_id = '${cleanUserId}' OR (role = 'patient' AND user_id IS NULL))`;
+        params.push(cleanUserId);
+        sql += ` AND (user_id = $${params.length} OR (role = 'patient' AND user_id IS NULL))`;
       } else {
-        sql += ` AND role = 'patient'`;
+        sql += " AND role = 'patient'";
       }
     } else if (cleanUserId) {
-      sql += ` AND user_id = '${cleanUserId}'`;
+      params.push(cleanUserId);
+      sql += ` AND user_id = $${params.length}`;
     }
 
-    db.run(sql);
-    saveDb(db);
+    await dbQuery(sql, params);
 
     return res.json({ message: 'All notifications marked as read' });
   } catch (error: any) {
@@ -3616,11 +3038,7 @@ apiRouter.post('/notifications/mark-all-read', async (req: Request, res: Respons
 apiRouter.delete('/notifications/:id', async (req: Request, res: Response) => {
   try {
     const id = Number(req.params.id);
-    const db = await getDb();
-
-    db.run('DELETE FROM notifications WHERE id = ?', [id]);
-    saveDb(db);
-
+    await dbQuery('DELETE FROM notifications WHERE id = $1', [id]);
     return res.json({ message: 'Notification deleted', id });
   } catch (error: any) {
     console.error('Delete notification error:', error);
@@ -3632,34 +3050,38 @@ apiRouter.delete('/notifications/:id', async (req: Request, res: Response) => {
 apiRouter.delete('/notifications/clear-all', async (req: Request, res: Response) => {
   try {
     const { userId, role } = req.body || req.query;
-    const db = await getDb();
-    const cleanUserId = userId ? String(userId).replace(/'/g, "''") : null;
+    const cleanUserId = userId ? String(userId) : null;
 
     let sql = 'DELETE FROM notifications WHERE 1=1';
+    const params: any[] = [];
+
     if (role === 'admin') {
       if (cleanUserId) {
-        sql += ` AND (role = 'admin' OR user_id = '${cleanUserId}')`;
+        params.push(cleanUserId);
+        sql += ` AND (role = 'admin' OR user_id = $${params.length})`;
       } else {
-        sql += ` AND role = 'admin'`;
+        sql += " AND role = 'admin'";
       }
     } else if (role === 'driver') {
       if (cleanUserId) {
-        sql += ` AND (user_id = '${cleanUserId}' OR (role = 'driver' AND user_id IS NULL))`;
+        params.push(cleanUserId);
+        sql += ` AND (user_id = $${params.length} OR (role = 'driver' AND user_id IS NULL))`;
       } else {
-        sql += ` AND role = 'driver'`;
+        sql += " AND role = 'driver'";
       }
     } else if (role === 'patient') {
       if (cleanUserId) {
-        sql += ` AND (user_id = '${cleanUserId}' OR (role = 'patient' AND user_id IS NULL))`;
+        params.push(cleanUserId);
+        sql += ` AND (user_id = $${params.length} OR (role = 'patient' AND user_id IS NULL))`;
       } else {
-        sql += ` AND role = 'patient'`;
+        sql += " AND role = 'patient'";
       }
     } else if (cleanUserId) {
-      sql += ` AND user_id = '${cleanUserId}'`;
+      params.push(cleanUserId);
+      sql += ` AND user_id = $${params.length}`;
     }
 
-    db.run(sql);
-    saveDb(db);
+    await dbQuery(sql, params);
 
     return res.json({ message: 'Notifications cleared successfully' });
   } catch (error: any) {
@@ -3679,7 +3101,7 @@ function getGenAI(): GoogleGenAI | null {
 }
 
 // POST /api/analyze-symptoms
-// Analyzes spoken or recorded symptoms to produce structured triage notes for dispatchers and paramedics
+// Analyzes spoken or recorded symptoms to produce structured triage notes
 apiRouter.post('/analyze-symptoms', async (req: Request, res: Response) => {
   try {
     const { rawTranscript, language } = req.body;
@@ -3705,7 +3127,7 @@ Provide a structured clinical assessment in JSON format with the following keys:
 - "recommendedEmergencyType": Choose exactly one of: "Cardiac", "Trauma", "Respiratory", "Critical Care", "Pregnancy", "General"
 - "urgency": "CRITICAL" (immediate life threat like arrest, severe bleeding, stroke, respiratory failure), "HIGH" (severe pain, fractures, deep wounds), or "MEDIUM" (moderate illness, stable)
 - "symptoms": array of 2-5 identified symptom keywords (e.g. ["Severe chest pain", "Diaphoresis", "Shortness of breath"])
-- "dispatcherNotes": Clear, prioritized bullet points for the emergency dispatcher and oncoming paramedic crew (including any immediate instructions/preparations required such as "Prepare defibrillator and oxygen", "Green corridor recommended").
+- "dispatcherNotes": Clear, prioritized bullet points for the emergency dispatcher and oncoming paramedic crew.
 - "firstAidTip": Brief 1-sentence instruction for the caller while waiting for ambulance.
 
 Return ONLY valid JSON.`;
@@ -3731,7 +3153,7 @@ Return ONLY valid JSON.`;
       }
     }
 
-    // High-accuracy heuristic rule-based emergency triage fallback
+    // Rule-based triage fallback
     const lower = text.toLowerCase();
     let recommendedEmergencyType = 'General';
     let urgency: 'CRITICAL' | 'HIGH' | 'MEDIUM' = 'MEDIUM';
@@ -3788,7 +3210,6 @@ Return ONLY valid JSON.`;
 });
 
 // PATCH /api/emergency/:id/notes
-// Update or append voice symptom notes to an active emergency request
 apiRouter.patch('/emergency/:id/notes', async (req: Request, res: Response) => {
   try {
     const id = Number(req.params.id);
@@ -3797,11 +3218,7 @@ apiRouter.patch('/emergency/:id/notes', async (req: Request, res: Response) => {
       return res.status(400).json({ error: 'Notes content is required' });
     }
 
-    const db = await getDb();
-    const now = new Date().toISOString();
-
-    const check = db.exec(`SELECT id, patient_name, driver_id, ambulance_id, notes FROM emergency_requests WHERE id = ${id}`);
-    const existing = formatQueryResult(check[0]);
+    const existing = await dbQuery('SELECT id, patient_name, driver_id, ambulance_id, notes FROM emergency_requests WHERE id = $1', [id]);
     if (!existing || existing.length === 0) {
       return res.status(404).json({ error: 'Emergency request not found' });
     }
@@ -3809,18 +3226,17 @@ apiRouter.patch('/emergency/:id/notes', async (req: Request, res: Response) => {
     const prevNotes = existing[0].notes || '';
     const mergedNotes = prevNotes ? `${prevNotes}\n\n[VOICE UPDATE ${new Date().toLocaleTimeString()}]: ${notes.trim()}` : `[VOICE REPORT]: ${notes.trim()}`;
 
-    db.run('UPDATE emergency_requests SET notes = ?, updated_at = ? WHERE id = ?', [mergedNotes, now, id]);
+    await dbQuery('UPDATE emergency_requests SET notes = $1, updated_at = NOW() WHERE id = $2', [mergedNotes, id]);
 
-    // Log in activity
-    db.run(
-      'INSERT INTO activity_logs (emergency_id, action, performed_by, timestamp) VALUES (?, ?, ?, ?)',
-      [id, `Emergency symptoms updated via voice recording by ${updatedBy || 'Patient'}`, updatedBy || 'Patient', now]
+    await dbQuery(
+      `INSERT INTO activity_logs (emergency_id, action, performed_by, timestamp) 
+       VALUES ($1, $2, $3, NOW())`,
+      [id, `Emergency symptoms updated via voice recording by ${updatedBy || 'Patient'}`, updatedBy || 'Patient']
     );
 
-    // Notify assigned driver and admin
     if (existing[0].driver_id) {
-      createNotification(db, {
-        userId: Number(existing[0].driver_id),
+      await createPgNotification({
+        userId: String(existing[0].driver_id),
         role: 'driver',
         title: `Symptom Update - Emergency #${id}`,
         message: `Patient provided updated symptoms via voice: ${notes.slice(0, 100)}...`,
@@ -3829,14 +3245,12 @@ apiRouter.patch('/emergency/:id/notes', async (req: Request, res: Response) => {
       });
     }
 
-    notifyRole(db, 'admin', {
+    await notifyPgRole('admin', {
       title: `Symptom Update - SOS #${id}`,
       message: `Updated patient voice symptoms received for #${id}: ${notes.slice(0, 100)}...`,
       notificationType: 'EMERGENCY_NOTES_UPDATED',
       emergencyRequestId: id,
     });
-
-    saveDb(db);
 
     return res.json({
       message: 'Emergency notes updated successfully',

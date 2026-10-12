@@ -38,14 +38,43 @@ export function createApp(): Express {
   // 2. Mount on root / as universal fallback for serverless rewrites where /api is stripped
   app.use('/', apiRouter);
 
-  // Health check endpoint
-  app.get(['/api/health', '/health'], (req, res) => {
-    res.json({
-      status: 'healthy',
+  // Health check endpoint distinguishing application liveness from PostgreSQL readiness
+  app.get(['/api/health', '/health'], async (req, res) => {
+    let dbStatus: { connected: boolean; latencyMs?: number; error?: string; configuredHost?: string } = {
+      connected: false,
+    };
+
+    try {
+      const { checkDatabaseConnection } = await import('./config/database.js');
+      dbStatus = await checkDatabaseConnection();
+    } catch (err: any) {
+      dbStatus = {
+        connected: false,
+        error: err.message || String(err),
+      };
+    }
+
+    const isReady = dbStatus.connected;
+    const requireReadiness = req.query.check === 'readiness' || req.query.check === 'ready';
+
+    const payload = {
+      status: isReady ? 'healthy' : 'degraded',
+      liveness: true,
+      readiness: isReady,
       system: 'Arogyavahini – Smart Integrated Emergency Medical Response System',
       version: '2.0.0',
+      uptimeSeconds: Math.floor(process.uptime()),
+      database: {
+        engine: 'Neon PostgreSQL',
+        status: isReady ? 'connected' : 'disconnected',
+        host: dbStatus.configuredHost || undefined,
+        latencyMs: dbStatus.latencyMs,
+        error: dbStatus.error || null,
+      },
       timestamp: new Date().toISOString(),
-    });
+    };
+
+    return res.status(requireReadiness && !isReady ? 503 : 200).json(payload);
   });
 
   // 404 JSON Handler for unmatched API routes - guarantees no HTML 404 is returned to API callers

@@ -36,7 +36,6 @@ export interface TrafficPriorityEventPayload {
   direction?: string;
   priority?: boolean;
   status: string;
-  hardwareResponse?: any;
   timestamp: string;
 }
 
