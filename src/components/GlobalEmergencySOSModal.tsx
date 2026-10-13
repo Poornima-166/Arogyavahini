@@ -203,7 +203,11 @@ export const GlobalEmergencySOSModal: React.FC<GlobalEmergencySOSModalProps> = (
         onEmergencyDispatched(res.emergency);
       }
     } catch (err: any) {
-      showToast(err.message || 'Failed to dispatch emergency ambulance', 'error');
+      if (err?.status === 503 || err?.data?.databaseStatus === 'disconnected') {
+        showToast('🚨 Emergency Service Unavailable (HTTP 503): Database disconnected. Please call 112 or 108 directly!', 'error');
+      } else {
+        showToast(err.message || 'Failed to dispatch emergency ambulance', 'error');
+      }
     } finally {
       setIsSubmitting(false);
     }

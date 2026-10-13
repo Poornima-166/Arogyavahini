@@ -44,6 +44,36 @@ export const apiRouter = Router();
 
 apiRouter.use('/navigation', navigationRoutes);
 
+/**
+ * Checks if an error is caused by a PostgreSQL connection failure or unreachable database
+ */
+export function isDatabaseConnectionError(error: any): boolean {
+  if (!error) return false;
+  const msg = (error.message || String(error)).toLowerCase();
+  const code = (error.code || '').toString();
+  return (
+    code === 'ECONNREFUSED' ||
+    code === 'ETIMEDOUT' ||
+    code === 'ENOTFOUND' ||
+    code === 'ECONNRESET' ||
+    code === '57P01' ||
+    code === '57P02' ||
+    code === '57P03' ||
+    code === '08001' ||
+    code === '08006' ||
+    code === '28P01' ||
+    msg.includes('econnrefused') ||
+    msg.includes('connection refused') ||
+    msg.includes('connection terminated') ||
+    msg.includes('connection timeout') ||
+    msg.includes('database_url') ||
+    msg.includes('postgres_url') ||
+    msg.includes('remaining connection slots are reserved') ||
+    msg.includes('too many clients already') ||
+    msg.includes('terminating connection')
+  );
+}
+
 // Helper to safely parse JSON route fields in emergency records
 function parseEmergencyRecord(e: any): any {
   if (!e) return e;
@@ -733,7 +763,11 @@ apiRouter.post('/emergency', async (req: Request, res: Response) => {
     });
   } catch (error: any) {
     console.error('Create emergency error:', error);
-    return res.status(500).json({ error: error.message || 'Failed to create emergency request' });
+    const isConn = isDatabaseConnectionError(error);
+    return res.status(isConn ? 503 : 500).json({
+      error: error.message || 'Failed to create emergency request',
+      databaseStatus: isConn ? 'disconnected' : 'error',
+    });
   }
 });
 
@@ -927,7 +961,11 @@ apiRouter.post('/emergency/:id/accept', async (req: Request, res: Response) => {
     });
   } catch (error: any) {
     console.error('Accept emergency error:', error);
-    return res.status(500).json({ error: error.message || 'Failed to accept emergency request' });
+    const isConn = isDatabaseConnectionError(error);
+    return res.status(isConn ? 503 : 500).json({
+      error: error.message || 'Failed to accept emergency request',
+      databaseStatus: isConn ? 'disconnected' : 'error',
+    });
   }
 });
 
@@ -935,11 +973,26 @@ apiRouter.post('/emergency/:id/accept', async (req: Request, res: Response) => {
 // Fetches all registered emergency hospitals with their ward capacity status
 apiRouter.get('/hospitals', async (req: Request, res: Response) => {
   try {
-    const hospitals = await dbQuery('SELECT * FROM hospitals ORDER BY ward_capacity ASC, id ASC');
-    return res.json({ hospitals });
+    let hospitals: any[] = [];
+    try {
+      hospitals = await dbQuery('SELECT * FROM hospitals ORDER BY ward_capacity ASC, id ASC');
+    } catch (dbErr: any) {
+      console.warn('[Hospitals] PostgreSQL connection unavailable:', dbErr?.message || dbErr);
+      return res.status(503).json({
+        error: 'Database unavailable. Hospitals directory cannot be loaded.',
+        databaseStatus: 'disconnected',
+        hospitals: [],
+      });
+    }
+    return res.json({ hospitals, databaseStatus: 'connected' });
   } catch (error: any) {
-    console.error('Fetch hospitals error:', error);
-    return res.status(500).json({ error: error.message || 'Failed to fetch hospitals' });
+    console.warn('[Hospitals] Query warning:', error?.message || error);
+    const isConn = isDatabaseConnectionError(error);
+    return res.status(isConn ? 503 : 500).json({
+      error: error.message || 'Failed to fetch hospitals',
+      databaseStatus: isConn ? 'disconnected' : 'error',
+      hospitals: [],
+    });
   }
 });
 
@@ -1055,11 +1108,13 @@ apiRouter.get('/nearby-hospitals', async (req: Request, res: Response) => {
     const radius = Number(req.query.radius || 10000);
 
     if (isNaN(lat) || isNaN(lng)) {
-      const latest = await dbQuery('SELECT latitude, longitude FROM emergency_requests WHERE latitude IS NOT NULL ORDER BY id DESC LIMIT 1');
-      if (latest.length > 0 && latest[0].latitude && latest[0].longitude) {
-        lat = Number(latest[0].latitude);
-        lng = Number(latest[0].longitude);
-      }
+      try {
+        const latest = await dbQuery('SELECT latitude, longitude FROM emergency_requests WHERE latitude IS NOT NULL ORDER BY id DESC LIMIT 1');
+        if (latest.length > 0 && latest[0].latitude && latest[0].longitude) {
+          lat = Number(latest[0].latitude);
+          lng = Number(latest[0].longitude);
+        }
+      } catch { /* DB read optional for fallback coordinates */ }
     }
 
     if (isNaN(lat) || isNaN(lng)) {
@@ -1067,7 +1122,12 @@ apiRouter.get('/nearby-hospitals', async (req: Request, res: Response) => {
     }
 
     const result = await searchRealNearbyHospitals(lat, lng, radius, emergencyType);
-    const dbHospitals = await dbQuery('SELECT * FROM hospitals');
+    let dbHospitals: any[] = [];
+    try {
+      dbHospitals = await dbQuery('SELECT * FROM hospitals');
+    } catch (dbErr: any) {
+      console.warn('[Nearby Hospitals] PostgreSQL connection unavailable; utilizing real-time geographic search:', dbErr?.message || dbErr);
+    }
 
     const dbMapByName = new Map<string, any>();
     const dbMapById = new Map<string, any>();
@@ -1131,7 +1191,7 @@ apiRouter.get('/nearby-hospitals', async (req: Request, res: Response) => {
 
     return res.json(result);
   } catch (error: any) {
-    console.error('Nearby hospitals search error:', error);
+    console.warn('[Nearby Hospitals] Search warning:', error?.message || error);
     return res.status(500).json({ error: error.message || 'Failed to search nearby hospitals' });
   }
 });
@@ -1158,58 +1218,74 @@ apiRouter.post('/fleet/sync-location', async (req: Request, res: Response) => {
       { latOffset: 0.014, lngOffset: -0.011, nameSuffix: 'West Rapid Response Depot' },
     ];
 
-    const ambulances = await dbQuery('SELECT * FROM ambulances ORDER BY id ASC');
+    let updatedAmbulances: any[] = [];
+    try {
+      const ambulances = await dbQuery('SELECT * FROM ambulances ORDER BY id ASC');
 
-    for (let idx = 0; idx < ambulances.length; idx++) {
-      const amb = ambulances[idx];
-      if (amb.status === 'AVAILABLE' || !amb.status) {
-        const offset = offsets[idx % offsets.length];
-        const newLat = parseFloat((lat + offset.latOffset).toFixed(5));
-        const newLng = parseFloat((lng + offset.lngOffset).toFixed(5));
-        const newBase = `${shortArea} ${offset.nameSuffix}`;
+      for (let idx = 0; idx < ambulances.length; idx++) {
+        const amb = ambulances[idx];
+        if (amb.status === 'AVAILABLE' || !amb.status) {
+          const offset = offsets[idx % offsets.length];
+          const newLat = parseFloat((lat + offset.latOffset).toFixed(5));
+          const newLng = parseFloat((lng + offset.lngOffset).toFixed(5));
+          const newBase = `${shortArea} ${offset.nameSuffix}`;
 
-        await dbQuery(
-          'UPDATE ambulances SET current_latitude = $1, current_longitude = $2, base_location = $3 WHERE id = $4',
-          [newLat, newLng, newBase, amb.id]
-        );
+          await dbQuery(
+            'UPDATE ambulances SET current_latitude = $1, current_longitude = $2, base_location = $3 WHERE id = $4',
+            [newLat, newLng, newBase, amb.id]
+          );
+        }
       }
-    }
 
-    // Relocate regional hospitals around user if far away (> 80 km)
-    const dbHospitals = await dbQuery('SELECT * FROM hospitals');
-    const hospOffsets = [
-      { latOff: 0.016, lngOff: 0.018, area: 'Apex Central Medical Plaza' },
-      { latOff: -0.018, lngOff: 0.021, area: 'Cardiac & Trauma Corridor' },
-      { latOff: -0.014, lngOff: -0.022, area: 'City District Hospital' },
-      { latOff: 0.022, lngOff: -0.015, area: 'Super-Specialty Emergency Hub' },
-      { latOff: 0.028, lngOff: 0.011, area: 'Memorial Trauma Pavilion' },
-      { latOff: -0.025, lngOff: -0.012, area: 'Metro Critical Care Wing' },
-    ];
+      // Relocate regional hospitals around user if far away (> 80 km)
+      const dbHospitals = await dbQuery('SELECT * FROM hospitals');
+      const hospOffsets = [
+        { latOff: 0.016, lngOff: 0.018, area: 'Apex Central Medical Plaza' },
+        { latOff: -0.018, lngOff: 0.021, area: 'Cardiac & Trauma Corridor' },
+        { latOff: -0.014, lngOff: -0.022, area: 'City District Hospital' },
+        { latOff: 0.022, lngOff: -0.015, area: 'Super-Specialty Emergency Hub' },
+        { latOff: 0.028, lngOff: 0.011, area: 'Memorial Trauma Pavilion' },
+        { latOff: -0.025, lngOff: -0.012, area: 'Metro Critical Care Wing' },
+      ];
 
-    for (let idx = 0; idx < dbHospitals.length; idx++) {
-      const h = dbHospitals[idx];
-      const dist = calculateGeoDistanceKm([Number(h.latitude), Number(h.longitude)], [lat, lng]);
-      if (dist > 80) {
-        const off = hospOffsets[idx % hospOffsets.length];
-        const newHLat = parseFloat((lat + off.latOff).toFixed(5));
-        const newHLng = parseFloat((lng + off.lngOff).toFixed(5));
-        const newAddr = `${shortArea} ${off.area}`;
-        await dbQuery(
-          'UPDATE hospitals SET latitude = $1, longitude = $2, address = $3 WHERE id = $4',
-          [newHLat, newHLng, newAddr, h.id]
-        );
+      for (let idx = 0; idx < dbHospitals.length; idx++) {
+        const h = dbHospitals[idx];
+        const dist = calculateGeoDistanceKm([Number(h.latitude), Number(h.longitude)], [lat, lng]);
+        if (dist > 80) {
+          const off = hospOffsets[idx % hospOffsets.length];
+          const newHLat = parseFloat((lat + off.latOff).toFixed(5));
+          const newHLng = parseFloat((lng + off.lngOff).toFixed(5));
+          const newAddr = `${shortArea} ${off.area}`;
+          await dbQuery(
+            'UPDATE hospitals SET latitude = $1, longitude = $2, address = $3 WHERE id = $4',
+            [newHLat, newHLng, newAddr, h.id]
+          );
+        }
       }
-    }
 
-    const updatedAmbulances = await dbQuery('SELECT * FROM ambulances ORDER BY id ASC');
+      updatedAmbulances = await dbQuery('SELECT * FROM ambulances ORDER BY id ASC');
+    } catch (dbErr: any) {
+      console.warn('[Fleet Sync] PostgreSQL unavailable for fleet synchronization:', dbErr?.message || dbErr);
+      return res.status(503).json({
+        error: 'Database unavailable. Ambulance fleet coordinates cannot be synchronized.',
+        databaseStatus: 'disconnected',
+        ambulances: [],
+      });
+    }
 
     return res.json({
       message: `Ambulance fleet and emergency coordinates successfully synchronized around GPS (${lat.toFixed(4)}, ${lng.toFixed(4)}) in ${shortArea}.`,
       ambulances: updatedAmbulances,
+      databaseStatus: 'connected',
     });
   } catch (error: any) {
-    console.error('Fleet sync location error:', error);
-    return res.status(500).json({ error: error.message || 'Failed to sync fleet location' });
+    console.warn('[Fleet Sync] Sync warning:', error?.message || error);
+    const isConn = isDatabaseConnectionError(error);
+    return res.status(isConn ? 503 : 500).json({
+      error: error.message || 'Failed to sync fleet location',
+      databaseStatus: isConn ? 'disconnected' : 'error',
+      ambulances: [],
+    });
   }
 });
 
@@ -1994,17 +2070,33 @@ apiRouter.get('/emergency', async (req: Request, res: Response) => {
       sql += ` AND e.status = $${params.length}`;
     }
 
-    sql += ' ORDER BY e.id DESC';
-
-    const emergencies = (await dbQuery(sql, params)).map(parseEmergencyRecord);
+    let emergencies: any[] = [];
+    try {
+      emergencies = (await dbQuery(sql, params)).map(parseEmergencyRecord);
+    } catch (dbErr: any) {
+      console.warn('[Emergencies] PostgreSQL connection unavailable:', dbErr?.message || dbErr);
+      return res.status(503).json({
+        error: 'Database unavailable. Emergency requests cannot be retrieved.',
+        databaseStatus: 'disconnected',
+        count: 0,
+        emergencies: [],
+      });
+    }
 
     return res.json({
       count: emergencies.length,
       emergencies,
+      databaseStatus: 'connected',
     });
   } catch (error: any) {
-    console.error('Fetch emergencies error:', error);
-    return res.status(500).json({ error: error.message || 'Failed to fetch emergency requests' });
+    console.warn('[Emergencies] Query warning:', error?.message || error);
+    const isConn = isDatabaseConnectionError(error);
+    return res.status(isConn ? 503 : 500).json({
+      error: error.message || 'Failed to fetch emergency requests',
+      databaseStatus: isConn ? 'disconnected' : 'error',
+      count: 0,
+      emergencies: [],
+    });
   }
 });
 
@@ -2037,7 +2129,12 @@ apiRouter.get('/emergency/in-transit-er', async (req: Request, res: Response) =>
     });
   } catch (error: any) {
     console.error('Fetch in-transit ER error:', error);
-    return res.status(500).json({ error: error.message || 'Failed to fetch in-transit emergencies' });
+    const isConn = isDatabaseConnectionError(error);
+    return res.status(isConn ? 503 : 500).json({
+      error: error.message || 'Failed to fetch in-transit emergencies',
+      databaseStatus: isConn ? 'disconnected' : 'error',
+      incoming_transfers: [],
+    });
   }
 });
 
@@ -2080,7 +2177,11 @@ apiRouter.get('/emergency/:id', async (req: Request, res: Response) => {
     });
   } catch (error: any) {
     console.error('Fetch emergency detail error:', error);
-    return res.status(500).json({ error: error.message || 'Failed to fetch emergency details' });
+    const isConn = isDatabaseConnectionError(error);
+    return res.status(isConn ? 503 : 500).json({
+      error: error.message || 'Failed to fetch emergency details',
+      databaseStatus: isConn ? 'disconnected' : 'error',
+    });
   }
 });
 
@@ -2400,7 +2501,11 @@ apiRouter.put('/emergency/:id/status', async (req: Request, res: Response) => {
     });
   } catch (error: any) {
     console.error('Update status error:', error);
-    return res.status(500).json({ error: error.message || 'Failed to update emergency status' });
+    const isConn = isDatabaseConnectionError(error);
+    return res.status(isConn ? 503 : 500).json({
+      error: error.message || 'Failed to update emergency status',
+      databaseStatus: isConn ? 'disconnected' : 'error',
+    });
   }
 });
 
@@ -2710,28 +2815,66 @@ apiRouter.get('/patient/:id/emergency-card', async (req: Request, res: Response)
 // GET /api/ambulances
 apiRouter.get('/ambulances', async (req: Request, res: Response) => {
   try {
-    const ambulances = await dbQuery('SELECT * FROM ambulances ORDER BY id ASC');
+    let ambulances: any[] = [];
+    try {
+      ambulances = await dbQuery('SELECT * FROM ambulances ORDER BY id ASC');
+    } catch (dbErr: any) {
+      console.warn('[Ambulances] PostgreSQL connection unavailable:', dbErr?.message || dbErr);
+      return res.status(503).json({
+        error: 'Database unavailable. Ambulance fleet data cannot be retrieved.',
+        databaseStatus: 'disconnected',
+        count: 0,
+        ambulances: [],
+      });
+    }
+
     return res.json({
       count: ambulances.length,
       ambulances,
+      databaseStatus: 'connected',
     });
   } catch (error: any) {
-    console.error('Fetch ambulances error:', error);
-    return res.status(500).json({ error: error.message || 'Failed to fetch ambulances' });
+    console.warn('[Ambulances] Query warning:', error?.message || error);
+    const isConn = isDatabaseConnectionError(error);
+    return res.status(isConn ? 503 : 500).json({
+      error: error.message || 'Failed to fetch ambulances',
+      databaseStatus: isConn ? 'disconnected' : 'error',
+      count: 0,
+      ambulances: [],
+    });
   }
 });
 
 // GET /api/ambulances/available
 apiRouter.get('/ambulances/available', async (req: Request, res: Response) => {
   try {
-    const ambulances = await dbQuery("SELECT * FROM ambulances WHERE status = 'AVAILABLE' ORDER BY id ASC");
+    let ambulances: any[] = [];
+    try {
+      ambulances = await dbQuery("SELECT * FROM ambulances WHERE status = 'AVAILABLE' ORDER BY id ASC");
+    } catch (dbErr: any) {
+      console.warn('[Available Ambulances] PostgreSQL connection unavailable:', dbErr?.message || dbErr);
+      return res.status(503).json({
+        error: 'Database unavailable. Available ambulances cannot be retrieved.',
+        databaseStatus: 'disconnected',
+        count: 0,
+        ambulances: [],
+      });
+    }
+
     return res.json({
       count: ambulances.length,
       ambulances,
+      databaseStatus: 'connected',
     });
   } catch (error: any) {
-    console.error('Fetch available ambulances error:', error);
-    return res.status(500).json({ error: error.message || 'Failed to fetch available ambulances' });
+    console.warn('[Available Ambulances] Query warning:', error?.message || error);
+    const isConn = isDatabaseConnectionError(error);
+    return res.status(isConn ? 503 : 500).json({
+      error: error.message || 'Failed to fetch available ambulances',
+      databaseStatus: isConn ? 'disconnected' : 'error',
+      count: 0,
+      ambulances: [],
+    });
   }
 });
 
@@ -2857,48 +3000,69 @@ apiRouter.post('/ambulances/:id/location', async (req: Request, res: Response) =
 // GET /api/stats
 apiRouter.get('/stats', async (req: Request, res: Response) => {
   try {
-    const totalReqQuery = await dbQuery('SELECT COUNT(*)::int as total FROM emergency_requests');
-    const totalEmergencies = totalReqQuery[0]?.total || 0;
+    try {
+      const totalReqQuery = await dbQuery('SELECT COUNT(*)::int as total FROM emergency_requests');
+      const totalEmergencies = totalReqQuery[0]?.total || 0;
 
-    const activeReqQuery = await dbQuery("SELECT COUNT(*)::int as active FROM emergency_requests WHERE status NOT IN ('COMPLETED', 'CANCELLED')");
-    const activeEmergencies = activeReqQuery[0]?.active || 0;
+      const activeReqQuery = await dbQuery("SELECT COUNT(*)::int as active FROM emergency_requests WHERE status NOT IN ('COMPLETED', 'CANCELLED')");
+      const activeEmergencies = activeReqQuery[0]?.active || 0;
 
-    const totalAmbQuery = await dbQuery('SELECT COUNT(*)::int as total FROM ambulances');
-    const totalAmbulances = totalAmbQuery[0]?.total || 0;
+      const totalAmbQuery = await dbQuery('SELECT COUNT(*)::int as total FROM ambulances');
+      const totalAmbulances = totalAmbQuery[0]?.total || 0;
 
-    const availAmbQuery = await dbQuery("SELECT COUNT(*)::int as avail FROM ambulances WHERE status = 'AVAILABLE'");
-    const availableAmbulances = availAmbQuery[0]?.avail || 0;
+      const availAmbQuery = await dbQuery("SELECT COUNT(*)::int as avail FROM ambulances WHERE status = 'AVAILABLE'");
+      const availableAmbulances = availAmbQuery[0]?.avail || 0;
 
-    const busyAmbQuery = await dbQuery("SELECT COUNT(*)::int as busy FROM ambulances WHERE status IN ('ASSIGNED', 'BUSY')");
-    const busyAmbulances = busyAmbQuery[0]?.busy || 0;
+      const busyAmbQuery = await dbQuery("SELECT COUNT(*)::int as busy FROM ambulances WHERE status IN ('ASSIGNED', 'BUSY')");
+      const busyAmbulances = busyAmbQuery[0]?.busy || 0;
 
-    const completedReqQuery = await dbQuery("SELECT COUNT(*)::int as comp FROM emergency_requests WHERE status = 'COMPLETED'");
-    const completedEmergencies = completedReqQuery[0]?.comp || 0;
+      const completedReqQuery = await dbQuery("SELECT COUNT(*)::int as comp FROM emergency_requests WHERE status = 'COMPLETED'");
+      const completedEmergencies = completedReqQuery[0]?.comp || 0;
 
-    const typeBreakdown = await dbQuery('SELECT emergency_type, COUNT(*)::int as count FROM emergency_requests GROUP BY emergency_type');
+      const typeBreakdown = await dbQuery('SELECT emergency_type, COUNT(*)::int as count FROM emergency_requests GROUP BY emergency_type');
 
-    // Real average response time from completed emergencies in minutes
-    const avgTimeQuery = await dbQuery(`
-      SELECT AVG(EXTRACT(EPOCH FROM (updated_at - created_at)) / 60)::numeric(10, 1) as avg_min 
-      FROM emergency_requests 
-      WHERE status = 'COMPLETED' AND created_at IS NOT NULL AND updated_at IS NOT NULL
-    `);
-    const rawAvg = avgTimeQuery[0]?.avg_min ? parseFloat(avgTimeQuery[0].avg_min) : null;
-    const averageResponseTimeMinutes = rawAvg && !isNaN(rawAvg) && rawAvg > 0 ? rawAvg : null;
+      // Real average response time from completed emergencies in minutes
+      const avgTimeQuery = await dbQuery(`
+        SELECT AVG(EXTRACT(EPOCH FROM (updated_at - created_at)) / 60)::numeric(10, 1) as avg_min 
+        FROM emergency_requests 
+        WHERE status = 'COMPLETED' AND created_at IS NOT NULL AND updated_at IS NOT NULL
+      `);
+      const rawAvg = avgTimeQuery[0]?.avg_min ? parseFloat(avgTimeQuery[0].avg_min) : null;
+      const averageResponseTimeMinutes = rawAvg && !isNaN(rawAvg) && rawAvg > 0 ? rawAvg : null;
 
-    return res.json({
-      totalEmergencies,
-      activeEmergencies,
-      totalAmbulances,
-      availableAmbulances,
-      busyAmbulances,
-      completedEmergencies,
-      averageResponseTimeMinutes,
-      typeBreakdown,
-    });
+      return res.json({
+        totalEmergencies,
+        activeEmergencies,
+        totalAmbulances,
+        availableAmbulances,
+        busyAmbulances,
+        completedEmergencies,
+        averageResponseTimeMinutes,
+        typeBreakdown,
+        databaseStatus: 'connected',
+      });
+    } catch (dbErr: any) {
+      console.warn('[Stats] PostgreSQL connection unavailable:', dbErr?.message || dbErr);
+      return res.status(503).json({
+        error: 'Database unavailable. Fleet and emergency statistics cannot be loaded.',
+        databaseStatus: 'disconnected',
+        totalEmergencies: 0,
+        activeEmergencies: 0,
+        totalAmbulances: 0,
+        availableAmbulances: 0,
+        busyAmbulances: 0,
+        completedEmergencies: 0,
+        averageResponseTimeMinutes: null,
+        typeBreakdown: [],
+      });
+    }
   } catch (error: any) {
-    console.error('Fetch stats error:', error);
-    return res.status(500).json({ error: error.message || 'Failed to fetch statistics' });
+    console.warn('[Stats] Query warning:', error?.message || error);
+    const isConn = isDatabaseConnectionError(error);
+    return res.status(isConn ? 503 : 500).json({
+      error: error.message || 'Failed to fetch statistics',
+      databaseStatus: isConn ? 'disconnected' : 'error',
+    });
   }
 });
 
@@ -2960,7 +3124,19 @@ apiRouter.get('/notifications', async (req: Request, res: Response) => {
     params.push(maxLimit);
     sql += ` ORDER BY id DESC LIMIT $${params.length}`;
 
-    const notifications = await dbQuery(sql, params);
+    let notifications: any[] = [];
+    try {
+      notifications = await dbQuery(sql, params);
+    } catch (dbErr: any) {
+      console.warn('[Notifications] PostgreSQL connection unavailable:', dbErr?.message || dbErr);
+      return res.status(503).json({
+        error: 'Database unavailable. Notifications cannot be retrieved.',
+        databaseStatus: 'disconnected',
+        count: 0,
+        unreadCount: 0,
+        notifications: [],
+      });
+    }
 
     let unreadCount = 0;
     for (const n of notifications) {
@@ -2971,10 +3147,18 @@ apiRouter.get('/notifications', async (req: Request, res: Response) => {
       count: notifications.length,
       unreadCount,
       notifications,
+      databaseStatus: 'connected',
     });
   } catch (error: any) {
-    console.error('Fetch notifications error:', error);
-    return res.status(500).json({ error: error.message || 'Failed to fetch notifications' });
+    console.warn('[Notifications] Query warning:', error?.message || error);
+    const isConn = isDatabaseConnectionError(error);
+    return res.status(isConn ? 503 : 500).json({
+      error: error.message || 'Failed to fetch notifications',
+      databaseStatus: isConn ? 'disconnected' : 'error',
+      count: 0,
+      unreadCount: 0,
+      notifications: [],
+    });
   }
 });
 

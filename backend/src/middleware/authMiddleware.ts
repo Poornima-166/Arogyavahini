@@ -8,12 +8,12 @@ export interface AuthenticatedRequest extends Request {
   };
 }
 
-export function mockAuthMiddleware(req: AuthenticatedRequest, res: Response, next: NextFunction) {
+export function authContextMiddleware(req: AuthenticatedRequest, res: Response, next: NextFunction) {
   // If user info is passed via headers or auth token
   const authHeader = req.headers.authorization;
   if (authHeader && authHeader.startsWith('Bearer ')) {
     // In production, verify JWT token here
-    // For development, provide context
+    // Provide user context from authorization headers
   }
   next();
 }

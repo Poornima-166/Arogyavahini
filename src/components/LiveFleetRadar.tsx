@@ -42,6 +42,7 @@ export const LiveFleetRadar: React.FC<LiveFleetRadarProps> = ({
   const [ambulances, setAmbulances] = useState<Ambulance[]>([]);
   const [hospitals, setHospitals] = useState<HospitalOption[]>([]);
   const [isLoading, setIsLoading] = useState(false);
+  const [dbUnavailable, setDbUnavailable] = useState(false);
   const [isLocationModalOpen, setIsLocationModalOpen] = useState(false);
 
   const mapContainerRef = useRef<HTMLDivElement | null>(null);
@@ -75,8 +76,12 @@ export const LiveFleetRadar: React.FC<LiveFleetRadarProps> = ({
       if (hospRes && hospRes.hospitals) {
         setHospitals(hospRes.hospitals);
       }
-    } catch (err) {
+      setDbUnavailable(false);
+    } catch (err: any) {
       console.warn('Fleet radar load error:', err);
+      if (err?.status === 503 || err?.data?.databaseStatus === 'disconnected') {
+        setDbUnavailable(true);
+      }
     } finally {
       setIsLoading(false);
     }
@@ -406,8 +411,20 @@ export const LiveFleetRadar: React.FC<LiveFleetRadarProps> = ({
         </div>
       </div>
 
-        {/* Map Container */}
-        <div className="relative isolate z-0">
+      {/* Database Service Unavailable Alert */}
+      {dbUnavailable && (
+        <div className="bg-amber-500/10 dark:bg-amber-500/15 border-b border-amber-500/30 px-4 py-2.5 text-xs text-amber-800 dark:text-amber-200 flex items-center justify-between">
+          <span className="font-semibold flex items-center gap-1.5">
+            ⚠️ Ambulance Fleet Telemetry Paused (HTTP 503) – PostgreSQL disconnected. Standby unit positions cannot be loaded.
+          </span>
+          <span className="text-[10px] uppercase font-mono px-2 py-0.5 bg-amber-200 dark:bg-amber-900 text-amber-900 dark:text-amber-200 rounded font-bold">
+            PostgreSQL Offline
+          </span>
+        </div>
+      )}
+
+      {/* Map Container */}
+      <div className="relative isolate z-0">
           <div ref={mapContainerRef} className={`w-full ${heightClass} bg-slate-100 dark:bg-slate-950`} />
 
           {/* Floating Map Legend Overlay on Top-Right */}

@@ -18,7 +18,7 @@ import { DriverNotificationsView } from './driver/DriverNotificationsView';
 import { DriverProfileSettingsView } from './driver/DriverProfileSettingsView';
 import { EmergencyReportModal } from './EmergencyReportModal';
 import { InTransitVitalsModal } from './InTransitVitalsModal';
-import { Menu, X, Radio, BellRing, Navigation } from 'lucide-react';
+import { Menu, X, Radio, BellRing, Navigation, AlertTriangle } from 'lucide-react';
 
 export const DriverDashboard: React.FC = () => {
   const { user, showToast, logout } = useAuth();
@@ -39,6 +39,8 @@ export const DriverDashboard: React.FC = () => {
   const [isUpdating, setIsUpdating] = useState(false);
   const [acceptingId, setAcceptingId] = useState<number | null>(null);
   const [isLoading, setIsLoading] = useState(true);
+  const [dbUnavailable, setDbUnavailable] = useState(false);
+  const [dbErrorMessage, setDbErrorMessage] = useState('');
 
   // Modals
   const [isVitalsModalOpen, setIsVitalsModalOpen] = useState(false);
@@ -266,8 +268,14 @@ export const DriverDashboard: React.FC = () => {
         );
         setAssignedEmergencies(filtered);
       }
-    } catch (e) {
+      setDbUnavailable(false);
+      setDbErrorMessage('');
+    } catch (e: any) {
       console.warn('Error loading driver data:', e);
+      if (e?.status === 503 || e?.data?.databaseStatus === 'disconnected') {
+        setDbUnavailable(true);
+        setDbErrorMessage(e?.message || e?.data?.error || 'PostgreSQL database connection is disconnected.');
+      }
     } finally {
       setIsLoading(false);
     }
@@ -602,6 +610,28 @@ export const DriverDashboard: React.FC = () => {
 
       {/* MAIN VIEW CONTENT AREA */}
       <main className="flex-1 p-4 sm:p-6 lg:p-8 max-w-7xl mx-auto w-full overflow-y-auto">
+        {dbUnavailable && (
+          <div className="mb-6 bg-amber-500/10 dark:bg-amber-500/15 border-2 border-amber-500/40 rounded-2xl p-5 flex items-start gap-4 text-amber-900 dark:text-amber-200 shadow-sm animate-pulse">
+            <AlertTriangle className="w-6 h-6 shrink-0 text-amber-600 dark:text-amber-400 mt-0.5" />
+            <div className="space-y-1">
+              <h4 className="font-bold text-sm sm:text-base text-amber-900 dark:text-amber-100 flex items-center gap-2">
+                <span>Driver Dispatch Database Unavailable (HTTP 503)</span>
+                <span className="text-[10px] font-mono uppercase bg-amber-500/20 text-amber-800 dark:text-amber-300 px-2 py-0.5 rounded font-semibold">
+                  PostgreSQL Offline
+                </span>
+              </h4>
+              <p className="text-xs text-amber-800 dark:text-amber-200 leading-relaxed">
+                The PostgreSQL database connection is disconnected. Incoming emergency requests, assigned missions, and fleet vehicle status cannot be loaded or persisted. Live dispatch is temporarily paused; no mock dispatches are shown.
+              </p>
+              {dbErrorMessage && (
+                <p className="text-[11px] font-mono text-amber-700 dark:text-amber-300 bg-amber-100/60 dark:bg-amber-950/60 p-1.5 px-2.5 rounded-lg inline-block">
+                  Detail: {dbErrorMessage}
+                </p>
+              )}
+            </div>
+          </div>
+        )}
+
         {/* TAB 1: DASHBOARD */}
         {activeTab === 'dashboard' && (
           <DriverDashboardView

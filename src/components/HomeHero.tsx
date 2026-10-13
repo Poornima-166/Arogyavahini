@@ -253,7 +253,7 @@ export const HomeHero: React.FC<HomeHeroProps> = ({ onOpenAuth }) => {
             Operational Overview
           </h2>
           <span className="text-xs text-slate-400 font-medium">
-            {isLoadingStats ? 'Updating...' : 'Verified System Metrics'}
+            {isLoadingStats ? 'Updating...' : stats ? 'Verified System Metrics' : 'Database Offline (Metrics Unavailable)'}
           </span>
         </div>
 

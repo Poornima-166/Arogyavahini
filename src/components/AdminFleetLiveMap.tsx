@@ -38,6 +38,7 @@ export const AdminFleetLiveMap: React.FC<AdminFleetLiveMapProps> = ({
   const [isLocatingAdmin, setIsLocatingAdmin] = useState(false);
   const [lastStreamTime, setLastStreamTime] = useState<string>('Live Connected');
   const [activeSocketCount, setActiveSocketCount] = useState<number>(0);
+  const [dbUnavailable, setDbUnavailable] = useState(false);
 
   const mapContainerRef = useRef<HTMLDivElement | null>(null);
   const mapInstanceRef = useRef<L.Map | null>(null);
@@ -64,8 +65,12 @@ export const AdminFleetLiveMap: React.FC<AdminFleetLiveMapProps> = ({
       if (reqRes && reqRes.emergencies) {
         setEmergencies(reqRes.emergencies.filter((e) => !['COMPLETED', 'CANCELLED'].includes(e.status)));
       }
-    } catch (err) {
+      setDbUnavailable(false);
+    } catch (err: any) {
       console.warn('Failed to fetch fleet data:', err);
+      if (err?.status === 503 || err?.data?.databaseStatus === 'disconnected') {
+        setDbUnavailable(true);
+      }
     }
   }, []);
 
@@ -485,6 +490,18 @@ export const AdminFleetLiveMap: React.FC<AdminFleetLiveMapProps> = ({
           </button>
         </div>
       </div>
+
+      {/* Database Service Unavailable Alert */}
+      {dbUnavailable && (
+        <div className="bg-amber-500/10 dark:bg-amber-500/15 border-b border-amber-500/30 px-4 py-2.5 text-xs text-amber-800 dark:text-amber-200 flex items-center justify-between">
+          <span className="font-semibold flex items-center gap-1.5">
+            ⚠️ Fleet Database Service Unavailable (HTTP 503) – PostgreSQL connection is disconnected. Live ambulance map positions paused.
+          </span>
+          <span className="text-[10px] uppercase font-mono px-2 py-0.5 bg-amber-200 dark:bg-amber-900 text-amber-900 dark:text-amber-200 rounded font-bold">
+            PostgreSQL Offline
+          </span>
+        </div>
+      )}
 
       {/* Map Container */}
       <div className="relative isolate z-0">

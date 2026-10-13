@@ -59,6 +59,8 @@ export const AdminDashboard: React.FC = () => {
   const [ambulances, setAmbulances] = useState<Ambulance[]>([]);
   const [hospitals, setHospitals] = useState<Hospital[]>([]);
   const [isLoading, setIsLoading] = useState(true);
+  const [dbUnavailable, setDbUnavailable] = useState(false);
+  const [dbErrorMessage, setDbErrorMessage] = useState('');
 
   // Filters
   const [statusFilter, setStatusFilter] = useState<string>('ALL');
@@ -108,8 +110,14 @@ export const AdminDashboard: React.FC = () => {
       if (hospData?.hospitals) {
         setHospitals(hospData.hospitals);
       }
-    } catch (e) {
+      setDbUnavailable(false);
+      setDbErrorMessage('');
+    } catch (e: any) {
       console.warn('Error loading admin data:', e);
+      if (e?.status === 503 || e?.data?.databaseStatus === 'disconnected') {
+        setDbUnavailable(true);
+        setDbErrorMessage(e?.message || e?.data?.error || 'PostgreSQL database connection is disconnected.');
+      }
     } finally {
       setIsLoading(false);
     }
@@ -380,6 +388,29 @@ export const AdminDashboard: React.FC = () => {
           </button>
         </div>
       </div>
+
+      {/* Database Service Unavailable Banner */}
+      {dbUnavailable && (
+        <div className="bg-amber-500/10 dark:bg-amber-500/15 border-2 border-amber-500/40 rounded-2xl p-5 flex items-start gap-4 text-amber-900 dark:text-amber-200 shadow-sm animate-pulse">
+          <AlertTriangle className="w-6 h-6 shrink-0 text-amber-600 dark:text-amber-400 mt-0.5" />
+          <div className="space-y-1">
+            <h4 className="font-bold text-sm sm:text-base text-amber-900 dark:text-amber-100 flex items-center gap-2">
+              <span>Database Service Temporarily Unavailable (HTTP 503)</span>
+              <span className="text-[10px] font-mono uppercase bg-amber-500/20 text-amber-800 dark:text-amber-300 px-2 py-0.5 rounded font-semibold">
+                PostgreSQL Offline
+              </span>
+            </h4>
+            <p className="text-xs text-amber-800 dark:text-amber-200 leading-relaxed">
+              The PostgreSQL connection is disconnected. Fleet status, active emergency requests, and hospital records cannot be loaded or updated from the database. Live metrics are paused and no fake or simulated data will be shown.
+            </p>
+            {dbErrorMessage && (
+              <p className="text-[11px] font-mono text-amber-700 dark:text-amber-300 bg-amber-100/60 dark:bg-amber-950/60 p-1.5 px-2.5 rounded-lg inline-block">
+                Detail: {dbErrorMessage}
+              </p>
+            )}
+          </div>
+        </div>
+      )}
 
       {/* Analytics Metric Cards / Reports */}
       <div id="admin-reports-section" className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-5 gap-4">

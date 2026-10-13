@@ -13,12 +13,19 @@ async function startServer() {
   // Initialize real-time Socket.IO communication
   initializeSocketIO(httpServer);
 
-  // Initialize database on startup
+  // Initialize database on startup with fail-fast verification
   try {
     await ensureDatabaseReady();
-    console.log('✅ Arogyavahini Database initialized and verified successfully.');
-  } catch (err) {
-    console.error('❌ Failed to initialize database:', err);
+    console.log('✅ Arogyavahini Database initialized and verified successfully against PostgreSQL.');
+  } catch (err: any) {
+    const errorMsg = err?.message || String(err);
+    console.error('❌ [Database Startup Failure] Could not connect to or initialize PostgreSQL database:', errorMsg);
+    if (process.env.NODE_ENV === 'production') {
+      console.error('💥 [FATAL] Fail-fast: Aborting production server startup due to database failure.');
+      process.exit(1);
+    } else {
+      console.warn('⚠️ [Development Warning] PostgreSQL database is currently unreachable or unconfigured. Server starting in degraded mode. Configure DATABASE_URL to verify live database.');
+    }
   }
 
   // Vite middleware for development vs Static files for production
